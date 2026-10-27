@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Laserschach Reflexion</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@400;600;800&display=swap">
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+/* Layout: Spielbrett links als Bühne, Steuerspalte rechts; unter 860px gestapelt */
+:root{
+  --bg:#e8edf2; --panel:#ffffff; --ink:#1c2836; --muted:#5a6b7d; --line:#c9d3de;
+  --sq-a:#f4f1ea; --sq-b:#b8c7d6; --frame:#2f4257;
+  --wall:#6c7584; --wall-top:#8a93a2; --king:#d39a1c; --king-dark:#8a5f05;
+  --mirror:#5fb8d6; --mirror-edge:#1f6f8c; --enemy:#7d8794;
+  --laser:#e0232e; --laser-glow:rgba(255,60,60,.35);
+  --ok:#2e8a4f; --warn:#b5541b; --accent:#2f6fb0;
+  --f-display:"Lilita One","Arial Rounded MT Bold",system-ui,sans-serif;
+  --f-body:"Nunito",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#121a24; --panel:#1b2532; --ink:#e6edf5; --muted:#9db0c4; --line:#2e3c4d;
+  --sq-a:#2c3a4a; --sq-b:#1f2a37; --frame:#0b1118;
+  --wall:#56606e; --wall-top:#727d8c; --king:#e8b33a; --king-dark:#8a6210;
+  --mirror:#7ed3ee; --mirror-edge:#bfefff; --enemy:#8f99a6;
+  --laser:#ff4a4a; --laser-glow:rgba(255,80,80,.45);
+  --ok:#5cc983; --warn:#f09358; --accent:#6aa9e8; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121a24; --panel:#1b2532; --ink:#e6edf5; --muted:#9db0c4; --line:#2e3c4d;
+  --sq-a:#2c3a4a; --sq-b:#1f2a37; --frame:#0b1118;
+  --wall:#56606e; --wall-top:#727d8c; --king:#e8b33a; --king-dark:#8a6210;
+  --mirror:#7ed3ee; --mirror-edge:#bfefff; --enemy:#8f99a6;
+  --laser:#ff4a4a; --laser-glow:rgba(255,80,80,.45);
+  --ok:#5cc983; --warn:#f09358; --accent:#6aa9e8; color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:16px;line-height:1.5}
+.wrap{max-width:1120px;margin:0 auto;padding-block:20px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:18px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+h1{font-family:var(--f-display);font-weight:400;font-size:clamp(2rem,5vw,2.8rem);line-height:1;margin:0;letter-spacing:.01em}
+h1 span{color:var(--laser)}
+.sub{margin:4px 0 0;color:var(--muted);font-weight:600}
+.levels{display:flex;gap:8px;flex-wrap:wrap}
+.lvl{font:inherit;font-weight:800;border:2px solid var(--line);background:var(--panel);color:var(--ink);border-radius:12px;padding:6px 14px;cursor:pointer;display:flex;flex-direction:column;align-items:center;line-height:1.2;min-width:84px}
+.lvl small{font-weight:600;color:var(--muted);font-size:.78rem}
+.lvl .st{color:var(--king);letter-spacing:2px;font-size:.85rem;min-height:1em}
+.lvl[aria-current="true"]{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
+button:focus-visible,.cell:focus-visible,.entry:focus-visible,summary:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}
+@media (max-width:860px){main{grid-template-columns:minmax(0,1fr)}}
+.stage{position:relative;min-width:0;display:flex;flex-direction:column;gap:10px}
+.board{width:100%;max-width:640px;aspect-ratio:1;display:block;margin:0 auto;border-radius:14px;background:var(--frame);touch-action:manipulation;user-select:none;-webkit-user-select:none}
+.cell{cursor:pointer}
+.cell:hover{filter:brightness(1.08)}
+.coord{font:700 9px var(--f-body);fill:var(--muted);opacity:.8}
+.showing{max-width:640px;margin:0 auto;width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;font-weight:800}
+.showing .who{font-family:var(--f-display);font-weight:400;font-size:1.5rem}
+.banner{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:var(--panel);border:3px solid var(--king);border-radius:18px;padding:18px 26px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.25);min-width:240px;max-width:90%}
+.banner h2{font-family:var(--f-display);font-weight:400;font-size:2.2rem;margin:0;color:var(--king)}
+.banner .stars{font-size:1.8rem;letter-spacing:4px;color:var(--king)}
+.banner p{margin:6px 0 12px;color:var(--muted);font-weight:600}
+.side{display:flex;flex-direction:column;gap:16px;min-width:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.panel h3{font-family:var(--f-display);font-weight:400;font-size:1.35rem;margin:0}
+.panel p{margin:0}
+.label{font-size:.75rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.counters{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.count{border:1px solid var(--line);border-radius:12px;padding:8px 12px}
+.count b{display:block;font-family:var(--f-display);font-weight:400;font-size:1.9rem;line-height:1.1;font-variant-numeric:tabular-nums}
+.pips{display:flex;gap:5px;margin-top:4px}
+.pip{width:14px;height:14px;border-radius:3px;border:2px solid var(--mirror-edge);transform:rotate(45deg)}
+.pip.full{background:var(--mirror)}
+.btn{font:inherit;font-weight:800;border-radius:12px;border:2px solid transparent;padding:12px 16px;cursor:pointer;font-size:1.05rem}
+.btn:disabled{opacity:.5;cursor:default}
+.fire{background:var(--laser);color:#fff;width:100%;font-family:var(--f-display);font-weight:400;font-size:1.4rem;letter-spacing:.03em}
+.primary{background:var(--accent);color:#fff;width:100%}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.ghost{background:transparent;border-color:var(--line);color:var(--ink);flex:1;font-size:.95rem;padding:9px 12px}
+.small{font-size:.9rem;padding:6px 12px;flex:0 0 auto}
+.danger{color:var(--warn)}
+.msg{border-radius:10px;padding:10px 12px;font-weight:700;background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.msg.bad{background:color-mix(in srgb,var(--warn) 15%,transparent);color:var(--warn)}
+.msg.good{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
+.toggle{display:flex;align-items:center;gap:10px;font-weight:700;cursor:pointer}
+.toggle input{width:20px;height:20px;accent-color:var(--accent)}
+.tip{border-left:4px solid var(--king);padding:6px 10px;background:color-mix(in srgb,var(--king) 10%,transparent);border-radius:0 8px 8px 0}
+.legend{display:grid;grid-template-columns:28px 1fr;gap:6px 10px;align-items:center;font-size:.92rem}
+.legend svg{width:28px;height:28px}
+.research{background:var(--panel);border:1px dashed var(--accent);border-radius:16px;padding:16px 18px;display:flex;flex-direction:column;gap:6px}
+.research h3{font-family:var(--f-display);font-weight:400;margin:0;font-size:1.25rem;color:var(--accent)}
+.research ol{margin:0;padding-left:1.3em;max-width:70ch}
+.codebox{border:2px dashed var(--accent);border-radius:12px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.code{font:800 1.3rem/1.2 var(--f-mono);letter-spacing:.06em;user-select:all;-webkit-user-select:all;word-break:break-all}
+.banner .code{display:block;margin:-4px 0 12px;font-size:1.2rem}
+.field{display:flex;flex-direction:column;gap:4px}
+.field input{font:inherit;font-weight:700;padding:10px 12px;border:2px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);width:100%}
+.field input:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
+.mono{font-family:var(--f-mono)!important;text-transform:uppercase;letter-spacing:.08em}
+.joined{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:middle}
+.dot.on{background:var(--ok)} .dot.off{background:var(--warn)}
+.sent{font-size:.9rem;font-weight:700;color:var(--muted)}
+.roomcode{font:800 clamp(1.8rem,5vw,2.4rem)/1.1 var(--f-mono);letter-spacing:.14em;text-align:center;color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);border-radius:12px;padding:10px}
+.qr{align-self:center;background:#fff;padding:12px;border-radius:12px;line-height:0}
+.qr img,.qr canvas{width:200px;height:200px;max-width:100%}
+.note{font-size:.88rem;color:var(--muted)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font:inherit;font-weight:800;font-size:.85rem;border:2px solid var(--line);background:transparent;color:var(--ink);border-radius:999px;padding:4px 12px;cursor:pointer}
+.chip[aria-pressed="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.list{display:flex;flex-direction:column;gap:6px;max-height:380px;overflow:auto}
+.entry{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:0 10px;align-items:center;text-align:left;border:2px solid var(--line);background:var(--bg);color:var(--ink);border-radius:10px;padding:8px 10px;cursor:pointer}
+.entry[aria-current="true"]{border-color:var(--accent)}
+.entry .res{font-weight:800;font-size:1.15rem;grid-row:span 2}
+.entry .res.hit{color:var(--ok)} .entry .res.miss{color:var(--warn)}
+.entry .nm{font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.entry .meta{font-size:.82rem;color:var(--muted);grid-column:2}
+.entry .lv{grid-row:1/span 2;grid-column:3;font-weight:800;font-size:.8rem;border:1px solid var(--line);border-radius:6px;padding:2px 6px}
+.empty{color:var(--muted);font-size:.92rem;border:1px dashed var(--line);border-radius:10px;padding:12px;margin:0}
+details summary{font-weight:800;cursor:pointer}
+details[open] summary{margin-bottom:10px}
+.foot{display:flex;justify-content:flex-end}
+.link{font:inherit;font-weight:700;background:none;border:0;color:var(--accent);text-decoration:underline;cursor:pointer;padding:4px}
+.h-row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Laser<span>schach</span></h1>
+      <p class="sub" id="sub">Stelle Spiegel auf und setze den König mit dem Laserstrahl matt.</p>
+    </div>
+    <nav class="levels" id="levels" aria-label="Level wählen"></nav>
+  </header>
+
+  <main>
+    <div class="stage">
+      <div class="showing" id="showing" hidden>
+        <span class="who" id="showWho"></span>
+        <span id="showMeta"></span>
+      </div>
+      <svg class="board" id="board" viewBox="-14 -14 508 508" role="img" aria-label="Spielfeld 8 mal 8"></svg>
+      <div class="banner" id="banner" hidden>
+        <h2>Schachmatt!</h2>
+        <div class="stars" id="bStars"></div>
+        <p id="bText"></p>
+        <button class="btn fire" id="next" type="button">Nächstes Level</button>
+      </div>
+    </div>
+
+    <!-- Schüleransicht -->
+    <div class="side" id="studentSide">
+      <section class="panel" id="roomPanel">
+        <div id="joinForm" class="panel" style="padding:0;border:0;gap:10px">
+          <h3>Lehrerraum beitreten</h3>
+          <div class="field"><label class="label" for="sRoom">Raumcode</label><input id="sRoom" class="mono" autocomplete="off" spellcheck="false" maxlength="9" placeholder="z. B. K7Q-2MX"></div>
+          <div class="field"><label class="label" for="sName">Vorname oder Kürzel</label><input id="sName" autocomplete="off" maxlength="24" placeholder="z. B. Lea K."></div>
+          <button class="btn primary" id="joinBtn" type="button">Beitreten</button>
+          <div class="msg" id="joinMsg" hidden aria-live="polite"></div>
+          <p class="note">Ohne Raum kannst du auch einfach so spielen.</p>
+        </div>
+        <div id="joinedBox" hidden>
+          <div class="joined">
+            <div><span class="dot" id="sDot"></span><b id="sRoomShow"></b><div class="note" id="sNameShow"></div></div>
+            <button class="btn ghost small" id="leaveBtn" type="button">Ändern</button>
+          </div>
+          <div class="sent" id="sentMsg" aria-live="polite" style="margin-top:8px">Jeder Schuss wird automatisch an deine Lehrkraft geschickt.</div>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div>
+          <div class="label" id="lvLabel">Level 1</div>
+          <h3 id="lvTitle"></h3>
+          <p id="lvText"></p>
+        </div>
+        <div class="counters">
+          <div class="count"><span class="label">Züge übrig</span><b id="moves">2</b><div class="pips" id="pips"></div></div>
+          <div class="count"><span class="label">Schüsse</span><b id="shots">0</b></div>
+        </div>
+        <button class="btn fire" id="fire" type="button">Laser abfeuern</button>
+        <div class="msg" id="msg" aria-live="polite">Tippe auf ein freies Feld, um einen Spiegel aufzustellen.</div>
+        <label class="toggle"><input type="checkbox" id="normals"> Lot und Winkel einblenden</label>
+        <div class="row">
+          <button class="btn ghost" id="reset" type="button">Neu starten</button>
+          <button class="btn ghost" id="hintBtn" type="button">Tipp</button>
+        </div>
+        <p class="tip" id="tip" hidden></p>
+        <div>
+          <div class="label" style="margin-bottom:6px">So geht's</div>
+          <div class="legend" id="legend"></div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Lehreransicht -->
+    <div class="side" id="teacherSide" hidden>
+      <section class="panel">
+        <h3>Live-Raum</h3>
+        <div class="roomcode" id="tRoom">–</div>
+        <div class="qr" id="qr"></div>
+        <p class="note" id="qrNote">Die Klasse scannt den QR-Code oder öffnet die Seite und gibt den Raumcode ein.</p>
+        <div class="msg" id="tConn" aria-live="polite">Verbinde …</div>
+        <p class="note">Abgaben laufen über einen öffentlichen Server (HiveMQ). Lass nur Vornamen oder Kürzel eintragen.</p>
+        <button class="btn ghost" id="newRoom" type="button">Neuen Raum erstellen</button>
+      </section>
+
+      <section class="panel">
+        <h3>Strahlengang zeigen</h3>
+        <div class="row">
+          <button class="btn primary" id="replay" type="button" style="flex:1" disabled>Strahl abspielen</button>
+          <button class="btn ghost" id="nextSub" type="button" disabled>Nächste Abgabe</button>
+        </div>
+        <label class="toggle"><input type="checkbox" id="normalsT"> Lot und Winkel einblenden</label>
+        <div class="msg" id="tMsg" aria-live="polite">Wähle unten eine Abgabe aus.</div>
+      </section>
+
+      <section class="panel">
+        <div class="h-row">
+          <h3>Abgaben <span class="note" id="tCount">(0)</span></h3>
+          <button class="btn ghost small" id="toggleOpen" type="button">Abgabe schließen</button>
+        </div>
+        <div class="chips" id="filter" role="group" aria-label="Nach Level filtern"></div>
+        <div class="list" id="tList"></div>
+        <button class="btn ghost danger" id="tClear" type="button">Neue Runde (alle Abgaben löschen)</button>
+      </section>
+    </div>
+  </main>
+
+  <section class="research" id="research">
+    <h3>Forscherauftrag</h3>
+    <ol>
+      <li>Schau dir genau an, wie der Strahl am Spiegel abknickt. Schalte dafür „Lot und Winkel einblenden“ ein.</li>
+      <li>Die gestrichelte Linie heißt <b>Lot</b>. Sie steht senkrecht auf dem Spiegel.</li>
+      <li>Vergleiche den Winkel zwischen ankommendem Strahl und Lot mit dem Winkel zwischen abgehendem Strahl und Lot. Was fällt dir auf?</li>
+    </ol>
+  </section>
+  <div class="foot"><button class="link" id="modeLink" type="button">Zur Lehreransicht</button></div>
+</div>
+
+<script>
+/* ================= Einstellungen ================= */
+const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+const TOPIC_BASE = "laserschach-reflexion/v1";
+const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // ohne 0/O, 1/I
+
+/* ================= Spielfeld & Level ================= */
+const C = 60, N = 8, NS = "http://www.w3.org/2000/svg";
+const DIRS = { N:[0,-1], E:[1,0], S:[0,1], W:[-1,0] };
+const FILES = "ABCDEFGH";
+const LEVELS = [
+  { title:"Um die Ecke", zuege:2,
+    text:"Der Laser steht unten links und schießt nach oben. Lenke den Strahl mit 2 Spiegeln zum König.",
+    tip:"Ein Spiegel lenkt den Strahl um eine Ecke. Du brauchst zwei Ecken: erst nach rechts, dann wieder nach oben.",
+    laser:{x:0,y:7,dir:"N"}, king:[6,1], walls:[[3,1],[3,5],[5,3]], fixed:[] },
+  { title:"Angriff von oben", zuege:3,
+    text:"Der König hat sich hinter Mauern versteckt. Nur von oben ist er ungeschützt. Du hast 3 Züge.",
+    tip:"Bring den Strahl zuerst ganz nach oben. Dann quer hinüber und von oben auf den König.",
+    laser:{x:7,y:7,dir:"W"}, king:[2,2], walls:[[3,2],[2,3],[1,2],[4,0],[4,5],[1,5]], fixed:[] },
+  { title:"Die große Runde", zuege:4,
+    text:"Der graue Spiegel gehört dem Gegner und lässt sich nicht bewegen. Pass auf, dass er dich nicht in die Irre führt. Du hast 4 Züge.",
+    tip:"Der Weg führt einmal im großen Bogen über das Spielfeld: runter, nach rechts, nach oben, nach links und zum Schluss von oben auf den König.",
+    laser:{x:0,y:0,dir:"S"}, king:[5,3], walls:[[4,3],[5,4],[6,3],[4,0],[2,2],[3,2],[2,7],[7,0],[1,1],[7,6]], fixed:[[5,0,"/"]] }
+];
+
+const $ = id => document.getElementById(id);
+const board = $("board");
+let lv = 0, mirrors = {}, shots = 0, won = false, busy = false, lastBeam = null;
+let mode = "student", animId = 0;
+
+const store = {
+  get(k, s=localStorage){ try { return JSON.parse(s.getItem(k)); } catch(e){ return null; } },
+  set(k, v, s=localStorage){ try { s.setItem(k, JSON.stringify(v)); } catch(e){} }
+};
+let progress = store.get("ls-stars"); if(!Array.isArray(progress)) progress=[0,0,0];
+
+function el(tag, attrs={}, parent){ const e=document.createElementNS(NS,tag); for(const k in attrs) e.setAttribute(k,attrs[k]); if(parent) parent.appendChild(e); return e; }
+const key = (x,y) => x+","+y;
+const L = () => LEVELS[lv];
+const isWall = (x,y) => L().walls.some(w=>w[0]===x&&w[1]===y);
+const fixedAt = (x,y) => { const f=L().fixed.find(f=>f[0]===x&&f[1]===y); return f?f[2]:null; };
+const isKing = (x,y) => L().king[0]===x&&L().king[1]===y;
+const isLaser = (x,y) => L().laser.x===x&&L().laser.y===y;
+const placed = () => Object.keys(mirrors).length;
+const showNormals = () => $(mode==="teacher"?"normalsT":"normals").checked;
+
+/* ================= Lösungscode ================= */
+// Format: Level-Feld+Richtung, z. B. 3-A3R-H3L  (R = "/", L = "\")
+function encode(level=lv, mm=mirrors){
+  const parts = Object.keys(mm).map(k=>{ const [x,y]=k.split(",").map(Number); return {x,y,t:mm[k]}; })
+    .sort((a,b)=>a.x-b.x||b.y-a.y)
+    .map(m=>FILES[m.x]+(8-m.y)+(m.t==="/"?"R":"L"));
+  return [String(level+1),...parts].join("-");
+}
+function decode(raw){
+  const s = String(raw).toUpperCase().replace(/[\s·.]/g,"");
+  const m = s.match(/^([1-9])-?((?:[A-H][1-8][RL]-?)*)$/);
+  if(!m) return {error:"Der Code ist nicht lesbar. Er sieht so aus: 3-A3R-H3L."};
+  const level = Number(m[1])-1;
+  if(!LEVELS[level]) return {error:`Level ${m[1]} gibt es nicht. Es gibt nur Level 1 bis ${LEVELS.length}.`};
+  const lvl = LEVELS[level], out = {};
+  for(const p of m[2].matchAll(/([A-H])([1-8])([RL])/g)){
+    const x = FILES.indexOf(p[1]), y = 8-Number(p[2]), k = key(x,y);
+    const blocked = lvl.walls.some(w=>w[0]===x&&w[1]===y) || lvl.fixed.some(f=>f[0]===x&&f[1]===y)
+      || (lvl.king[0]===x&&lvl.king[1]===y) || (lvl.laser.x===x&&lvl.laser.y===y);
+    if(blocked) return {error:`Auf Feld ${p[1]}${p[2]} kann in Level ${level+1} kein Spiegel stehen.`};
+    if(out[k]) return {error:`Feld ${p[1]}${p[2]} kommt doppelt vor.`};
+    out[k] = p[3]==="R" ? "/" : "\\";
+  }
+  if(Object.keys(out).length > lvl.zuege) return {error:`In Level ${level+1} sind nur ${lvl.zuege} Spiegel erlaubt.`};
+  return {lv:level, mirrors:out};
+}
+
+/* ================= Zeichnen ================= */
+function drawMirror(g, x, y, t, enemy){
+  const cx=x*C+C/2, cy=y*C+C/2, r=C*0.36;
+  const [x1,y1,x2,y2] = t==="/" ? [cx-r,cy+r,cx+r,cy-r] : [cx-r,cy-r,cx+r,cy+r];
+  el("line",{x1,y1,x2,y2,stroke:enemy?"var(--enemy)":"var(--mirror-edge)","stroke-width":11,"stroke-linecap":"round"},g);
+  el("line",{x1,y1,x2,y2,stroke:enemy?"var(--sq-a)":"var(--mirror)","stroke-width":6,"stroke-linecap":"round"},g);
+  if(enemy) el("circle",{cx,cy,r:5,fill:"var(--enemy)"},g);
+}
+function drawWall(g,x,y){
+  const px=x*C+5, py=y*C+5, s=C-10;
+  el("rect",{x:px,y:py,width:s,height:s,rx:6,fill:"var(--wall)"},g);
+  el("rect",{x:px+4,y:py+4,width:s-8,height:s-14,rx:4,fill:"var(--wall-top)"},g);
+  el("path",{d:`M${px+4} ${py+s/2-2}h${s-8}M${px+s/2} ${py+4}v${s/2-6}M${px+s/4} ${py+s/2-2}v${s/2-8}M${px+3*s/4} ${py+s/2-2}v${s/2-8}`,stroke:"var(--wall)","stroke-width":2,fill:"none"},g);
+}
+function drawKing(g,x,y,fallen){
+  const cx=x*C+C/2, cy=y*C+C/2;
+  const k = el("g",{id:"king",style:`transform-origin:${cx}px ${cy+20}px;transition:transform .6s cubic-bezier(.5,-0.3,.6,1.4)`},g);
+  if(fallen) k.style.transform="rotate(90deg)";
+  el("ellipse",{cx,cy:cy+21,rx:17,ry:4,fill:"var(--king-dark)",opacity:.35},k);
+  el("path",{d:`M${cx-15} ${cy+19} L${cx-17} ${cy-6} L${cx-8} ${cy+2} L${cx} ${cy-12} L${cx+8} ${cy+2} L${cx+17} ${cy-6} L${cx+15} ${cy+19} Z`,fill:"var(--king)",stroke:"var(--king-dark)","stroke-width":2.5,"stroke-linejoin":"round"},k);
+  el("path",{d:`M${cx} ${cy-25}v10M${cx-5} ${cy-20}h10`,stroke:"var(--king-dark)","stroke-width":3,"stroke-linecap":"round"},k);
+  el("rect",{x:cx-15,y:cy+11,width:30,height:6,rx:2,fill:"var(--king-dark)"},k);
+}
+function drawLaser(g,l){
+  const cx=l.x*C+C/2, cy=l.y*C+C/2, [dx,dy]=DIRS[l.dir];
+  const gg = el("g",{transform:`translate(${cx} ${cy}) rotate(${Math.atan2(dy,dx)*180/Math.PI})`},g);
+  el("rect",{x:-22,y:-20,width:40,height:40,rx:8,fill:"var(--frame)"},gg);
+  el("rect",{x:-14,y:-12,width:24,height:24,rx:5,fill:"var(--wall-top)"},gg);
+  el("rect",{x:8,y:-6,width:20,height:12,rx:3,fill:"var(--frame)"},gg);
+  el("circle",{cx:27,cy:0,r:4,fill:"var(--laser)"},gg);
+  el("circle",{cx:-2,cy:0,r:5,fill:"var(--laser)"},gg);
+}
+
+function render(){
+  board.innerHTML="";
+  const l=L();
+  el("rect",{x:-14,y:-14,width:508,height:508,rx:14,fill:"var(--frame)"},board);
+  const cells = el("g",{},board);
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    const r = el("rect",{x:x*C,y:y*C,width:C,height:C,fill:(x+y)%2?"var(--sq-b)":"var(--sq-a)",class:"cell",
+      "aria-label":`Feld ${"abcdefgh"[x]}${8-y}`},cells);
+    if(mode==="student"){
+      r.setAttribute("tabindex","0");
+      r.addEventListener("click",()=>tap(x,y));
+      r.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); tap(x,y);} });
+    } else r.style.cursor="default";
+  }
+  const labels = el("g",{"pointer-events":"none"},board);
+  for(let i=0;i<N;i++){
+    el("text",{x:i*C+C-4,y:N*C-4,"text-anchor":"end",class:"coord"},labels).textContent="abcdefgh"[i];
+    el("text",{x:3,y:i*C+11,class:"coord"},labels).textContent=8-i;
+  }
+  const pieces = el("g",{"pointer-events":"none"},board);
+  l.walls.forEach(([x,y])=>drawWall(pieces,x,y));
+  l.fixed.forEach(([x,y,t])=>drawMirror(pieces,x,y,t,true));
+  for(const k in mirrors){ const [x,y]=k.split(",").map(Number); drawMirror(pieces,x,y,mirrors[k],false); }
+  drawKing(pieces,l.king[0],l.king[1],won);
+  drawLaser(pieces,l.laser);
+  el("g",{id:"beamLayer","pointer-events":"none"},board);
+  if(lastBeam) drawBeam(lastBeam,false);
+  updatePanel();
+}
+
+/* ================= Strahlengang ================= */
+function trace(){
+  const l=L(); let x=l.laser.x, y=l.laser.y, [dx,dy]=DIRS[l.laser.dir];
+  const pts=[[x*C+C/2,y*C+C/2]], refl=[], seen=new Set();
+  for(let i=0;i<300;i++){
+    const px=x, py=y; x+=dx; y+=dy;
+    if(x<0||y<0||x>=N||y>=N){ pts.push([px*C+C/2+dx*C/2, py*C+C/2+dy*C/2]); return {pts,refl,end:"out"}; }
+    if(isWall(x,y)){ pts.push([x*C+C/2-dx*(C/2-5), y*C+C/2-dy*(C/2-5)]); return {pts,refl,end:"wall"}; }
+    if(isKing(x,y)){ pts.push([x*C+C/2,y*C+C/2]); return {pts,refl,end:"hit"}; }
+    if(isLaser(x,y)){ pts.push([x*C+C/2-dx*22, y*C+C/2-dy*22]); return {pts,refl,end:"self"}; }
+    const t = mirrors[key(x,y)] || fixedAt(x,y);
+    if(t){
+      const inD=[dx,dy];
+      if(t==="/") [dx,dy]=[-dy,-dx]; else [dx,dy]=[dy,dx];
+      pts.push([x*C+C/2,y*C+C/2]);
+      refl.push({x,y,t,inD,outD:[dx,dy]});
+    }
+    const s=key(x,y)+dx+dy; if(seen.has(s)) return {pts,refl,end:"loop"}; seen.add(s);
+  }
+  return {pts,refl,end:"loop"};
+}
+function resultFor(level, mm){
+  const kl=lv, km=mirrors; lv=level; mirrors=mm; const r=trace(); lv=kl; mirrors=km; return r;
+}
+
+function drawBeam(b, animate){
+  const layer=$("beamLayer"); layer.innerHTML="";
+  const d = b.pts.map((p,i)=>(i?"L":"M")+p[0]+" "+p[1]).join("");
+  const glow = el("path",{d,stroke:"var(--laser-glow)","stroke-width":12,fill:"none","stroke-linecap":"round","stroke-linejoin":"round"},layer);
+  const core = el("path",{d,stroke:"var(--laser)","stroke-width":3.5,fill:"none","stroke-linecap":"round","stroke-linejoin":"round"},layer);
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const id = ++animId;
+  if(animate && !reduce){
+    const slow = mode==="teacher" ? 2.6 : 1.6;
+    const len = core.getTotalLength(), dur = Math.min(mode==="teacher"?4200:2600, 300 + len*slow);
+    [glow,core].forEach(p=>{ p.style.strokeDasharray=len; p.style.strokeDashoffset=len; p.getBoundingClientRect();
+      p.style.transition=`stroke-dashoffset ${dur}ms linear`; p.style.strokeDashoffset=0; });
+    setTimeout(()=>{ if(id!==animId) return; if(showNormals()) drawNormals(b); finish(b); }, dur+60);
+  } else {
+    if(showNormals()) drawNormals(b);
+    if(animate) finish(b);
+  }
+}
+
+function drawNormals(b){
+  const layer=$("beamLayer");
+  b.refl.forEach(r=>{
+    const cx=r.x*C+C/2, cy=r.y*C+C/2;
+    let n = r.t==="/" ? [1,1] : [1,-1];
+    if(n[0]*r.inD[0]+n[1]*r.inD[1] > 0) n=[-n[0],-n[1]];
+    n=[n[0]*Math.SQRT1_2,n[1]*Math.SQRT1_2];
+    el("line",{x1:cx,y1:cy,x2:cx+n[0]*40,y2:cy+n[1]*40,stroke:"var(--ink)","stroke-width":2,"stroke-dasharray":"4 4"},layer);
+    const back=[-r.inD[0],-r.inD[1]], out=r.outD, R=20;
+    [back,out].forEach((v,i)=>{
+      const a1=Math.atan2(v[1],v[0]), a2=Math.atan2(n[1],n[0]);
+      const p1=[cx+R*Math.cos(a1),cy+R*Math.sin(a1)], p2=[cx+R*Math.cos(a2),cy+R*Math.sin(a2)];
+      const cross=v[0]*n[1]-v[1]*n[0];
+      el("path",{d:`M${p1[0]} ${p1[1]} A${R} ${R} 0 0 ${cross>0?1:0} ${p2[0]} ${p2[1]}`,stroke:i?"var(--accent)":"var(--king-dark)","stroke-width":3,fill:"none"},layer);
+      const mid=[v[0]+n[0],v[1]+n[1]], ml=Math.hypot(mid[0],mid[1]);
+      const tx=cx+mid[0]/ml*31, ty=cy+mid[1]/ml*31;
+      el("circle",{cx:tx,cy:ty,r:10,fill:"var(--panel)",opacity:.9},layer);
+      el("text",{x:tx,y:ty+4,"text-anchor":"middle",style:"font:800 10px var(--f-body)",fill:"var(--ink)"},layer).textContent="45°";
+    });
+  });
+}
+
+/* ================= Spiel (Schüler) ================= */
+function setMsg(t,cls=""){ const m=$("msg"); m.textContent=t; m.className="msg "+cls; }
+
+function tap(x,y){
+  if(mode!=="student"||busy||won) return;
+  if(isWall(x,y)) return setMsg("Hier steht eine Mauer. Dort passt kein Spiegel hin.","bad");
+  if(isKing(x,y)) return setMsg("Das ist der König. Den musst du mit dem Laser treffen!","bad");
+  if(isLaser(x,y)) return setMsg("Das ist dein Laser. Er bleibt in seiner Ecke stehen.","bad");
+  if(fixedAt(x,y)) return setMsg("Dieser graue Spiegel gehört dem Gegner. Du kannst ihn nicht bewegen.","bad");
+  const k=key(x,y);
+  if(!mirrors[k]){
+    if(placed()>=L().zuege) return setMsg("Keine Züge mehr übrig. Nimm einen Spiegel weg oder drehe einen.","bad");
+    mirrors[k]="/"; setMsg("Spiegel gesetzt. Tippe ihn noch einmal an, um ihn zu drehen.");
+  } else if(mirrors[k]==="/"){ mirrors[k]="\\"; setMsg("Spiegel gedreht. Noch einmal antippen nimmt ihn weg."); }
+  else { delete mirrors[k]; setMsg("Spiegel weggenommen. Du hast den Zug zurück."); }
+  lastBeam=null; render();
+}
+
+function fire(){
+  if(busy||won) return;
+  busy=true; shots++; lastBeam=trace(); updatePanel();
+  setMsg("Laser feuert …");
+  sendSubmission(encode(), lastBeam.end);
+  drawBeam(lastBeam,true);
+}
+
+function finish(b){
+  busy=false;
+  if(mode==="teacher") return teacherFinish(b);
+  const texts={
+    out:"Daneben! Der Strahl hat das Spielfeld verlassen. Verändere deine Spiegel und versuche es noch einmal.",
+    wall:"Der Strahl ist an einer Mauer gestoppt. Mauern lassen kein Licht durch.",
+    self:"Autsch! Der Strahl ist zu deinem eigenen Laser zurückgekommen.",
+    loop:"Der Strahl läuft im Kreis. Ändere einen Spiegel."
+  };
+  if(b.end==="hit"){
+    won=true;
+    const stars = shots===1?3:shots<=3?2:1;
+    progress[lv]=Math.max(progress[lv]||0,stars); store.set("ls-stars",progress);
+    const k=$("king"); if(k) k.style.transform="rotate(90deg)";
+    setMsg("Treffer! Der König ist matt.","good");
+    setTimeout(()=>{
+      $("bStars").textContent="★".repeat(stars)+"☆".repeat(3-stars);
+      $("bText").textContent = `Geschafft mit ${placed()} Spiegel${placed()===1?"":"n"} und ${shots} Schuss${shots===1?"":"en"}.`;
+      $("next").textContent = lv<LEVELS.length-1 ? "Nächstes Level" : "Nochmal spielen";
+      $("banner").hidden=false; updateLevels();
+    },700);
+  } else setMsg(texts[b.end],"bad");
+  updatePanel();
+}
+
+function loadLevel(i){
+  lv=i; mirrors={}; shots=0; won=false; busy=false; lastBeam=null; animId++;
+  $("banner").hidden=true; $("tip").hidden=true; $("hintBtn").textContent="Tipp";
+  setMsg("Tippe auf ein freies Feld, um einen Spiegel aufzustellen.");
+  render(); updateLevels();
+}
+
+function updatePanel(){
+  const l=L(), left=l.zuege-placed();
+  $("lvLabel").textContent=`Level ${lv+1} von ${LEVELS.length}`;
+  $("lvTitle").textContent=l.title; $("lvText").textContent=l.text; $("tip").textContent=l.tip;
+  $("moves").textContent=left; $("shots").textContent=shots;
+  $("pips").innerHTML=Array.from({length:l.zuege},(_,i)=>`<span class="pip${i<left?" full":""}"></span>`).join("");
+  $("fire").disabled=busy||won;
+}
+
+function updateLevels(){
+  const nav=$("levels"); nav.innerHTML="";
+  LEVELS.forEach((l,i)=>{
+    const b=document.createElement("button");
+    b.className="lvl"; b.type="button"; b.setAttribute("aria-current",i===lv?"true":"false");
+    b.innerHTML=`Level ${i+1}<small>${l.zuege} Züge</small><span class="st">${progress[i]?"★".repeat(progress[i]):""}</span>`;
+    b.addEventListener("click",()=>loadLevel(i));
+    nav.appendChild(b);
+  });
+}
+
+function legend(){
+  const items=[
+    [`<rect x="2" y="2" width="24" height="24" rx="5" fill="var(--sq-a)"/><line x1="7" y1="21" x2="21" y2="7" stroke="var(--mirror-edge)" stroke-width="6" stroke-linecap="round"/><line x1="7" y1="21" x2="21" y2="7" stroke="var(--mirror)" stroke-width="3" stroke-linecap="round"/>`,
+     "Dein Spiegel. Antippen: setzen → drehen → wegnehmen. Jeder gesetzte Spiegel kostet einen Zug."],
+    [`<rect x="2" y="2" width="24" height="24" rx="5" fill="var(--sq-a)"/><line x1="7" y1="7" x2="21" y2="21" stroke="var(--enemy)" stroke-width="6" stroke-linecap="round"/><line x1="7" y1="7" x2="21" y2="21" stroke="var(--sq-a)" stroke-width="3" stroke-linecap="round"/>`,
+     "Gegnerischer Spiegel. Er spiegelt auch, ist aber festgeschraubt."],
+    [`<rect x="3" y="3" width="22" height="22" rx="4" fill="var(--wall)"/><rect x="6" y="6" width="16" height="12" rx="3" fill="var(--wall-top)"/>`,
+     "Mauer. Hier endet der Strahl."],
+    [`<path d="M6 23 L5 10 L10 15 L14 7 L18 15 L23 10 L22 23Z" fill="var(--king)" stroke="var(--king-dark)" stroke-width="1.5"/>`,
+     "König. Triff ihn mit dem Laserstrahl!"]
+  ];
+  $("legend").innerHTML=items.map(([s,t])=>`<svg viewBox="0 0 28 28" aria-hidden="true">${s}</svg><span>${t}</span>`).join("");
+}
+
+/* ================= Verbindung (MQTT) ================= */
+let client = null, connected = false;
+const handlers = {};      // topic -> function(payloadString)
+const connWatchers = [];  // function(state)
+const rand = n => { const a=new Uint32Array(n); crypto.getRandomValues(a); return Array.from(a,v=>ROOM_ALPHABET[v%ROOM_ALPHABET.length]).join(""); };
+const topic = (room, part) => `${TOPIC_BASE}/${room}/${part}`;
+const fmtRoom = r => r.slice(0,3)+"-"+r.slice(3);
+const normRoom = s => String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+const validRoom = r => r.length===6 && [...r].every(c=>ROOM_ALPHABET.includes(c));
+
+function ensureClient(){
+  if(client) return client;
+  if(typeof mqtt==="undefined"){ connWatchers.forEach(f=>f("nolib")); return null; }
+  const opts = { clientId:"ls-"+rand(12), clean:true, keepalive:30, connectTimeout:8000, reconnectPeriod:3000 };
+  // Lehrkraft: Bricht die Verbindung ab, löscht der Server die Raum-Ankündigung von selbst.
+  if(mode==="teacher" && tRoom) opts.will = { topic:topic(tRoom,"status"), payload:"", qos:1, retain:true };
+  client = mqtt.connect(BROKER, opts);
+  client.on("connect", ()=>{ connected=true; Object.keys(handlers).forEach(t=>client.subscribe(t,{qos:1})); connWatchers.forEach(f=>f("on")); });
+  client.on("reconnect", ()=>connWatchers.forEach(f=>f("retry")));
+  client.on("offline", ()=>{ connected=false; connWatchers.forEach(f=>f("off")); });
+  client.on("close", ()=>{ connected=false; });
+  client.on("error", ()=>connWatchers.forEach(f=>f("off")));
+  client.on("message", (t, buf)=>{ const h=handlers[t]; if(h) h(buf.toString()); });
+  return client;
+}
+function sub(t, fn){ handlers[t]=fn; const c=ensureClient(); if(c) c.subscribe(t,{qos:1}); }
+function unsub(t){ delete handlers[t]; if(client) client.unsubscribe(t); }
+function pub(t, obj, retain=false){ const c=ensureClient(); if(!c) return false; c.publish(t, obj===null?"":JSON.stringify(obj), {qos:1, retain}); return true; }
+
+/* ================= Schüler: Raum ================= */
+let sRoom = null, sName = "", sOpen = false, sFoundTimer = null;
+let sId = store.get("ls-id", sessionStorage); if(!sId){ sId=rand(10); store.set("ls-id", sId, sessionStorage); }
+
+function joinMsg(t, cls=""){ const m=$("joinMsg"); m.hidden=!t; m.textContent=t; m.className="msg "+cls; }
+function showJoined(on){ $("joinForm").hidden=on; $("joinedBox").hidden=!on; }
+function sStatus(){
+  const dot=$("sDot");
+  if(!connected){ dot.className="dot off"; $("sentMsg").textContent="Verbindung unterbrochen. Sie wird automatisch wiederhergestellt."; return; }
+  dot.className = "dot "+(sOpen?"on":"off");
+  $("sentMsg").textContent = sOpen ? "Jeder Schuss wird automatisch an deine Lehrkraft geschickt." : "Die Abgabe ist gerade geschlossen. Du kannst weiterspielen.";
+}
+
+function join(){
+  const r=normRoom($("sRoom").value), n=$("sName").value.trim().slice(0,24);
+  if(!validRoom(r)) return joinMsg("Der Raumcode hat 6 Zeichen, z. B. K7Q-2MX. Bitte prüfe ihn.","bad");
+  if(!n) return joinMsg("Bitte trage deinen Vornamen oder ein Kürzel ein.","bad");
+  if(!ensureClient()) return joinMsg("Die Verbindung zum Raum ist auf diesem Gerät nicht möglich. Du kannst trotzdem spielen.","bad");
+  if(sRoom && sRoom!==r) unsub(topic(sRoom,"status"));
+  sRoom=r; sName=n; sOpen=false;
+  store.set("ls-student",{room:r,name:n},sessionStorage);
+  joinMsg("Suche Raum "+fmtRoom(r)+" …");
+  $("joinBtn").disabled=true;
+  let found=false;
+  clearTimeout(sFoundTimer);
+  sFoundTimer=setTimeout(()=>{ if(!found){ $("joinBtn").disabled=false; joinMsg(connected?"Raum "+fmtRoom(r)+" nicht gefunden. Ist der Code richtig und die Lehreransicht geöffnet?":"Keine Verbindung zum Server. Prüfe das Internet oder spiele ohne Raum weiter.","bad"); } }, 6000);
+  sub(topic(r,"status"), raw=>{
+    let s=null; try{ s=raw?JSON.parse(raw):null; }catch(e){}
+    if(!s){ if(found){ sOpen=false; sStatus(); $("sentMsg").textContent="Dieser Raum wurde beendet. Tippe auf „Ändern“, um einem neuen Raum beizutreten."; } return; }
+    if(!found){ found=true; clearTimeout(sFoundTimer); $("joinBtn").disabled=false; joinMsg(""); showJoined(true);
+      $("sRoomShow").textContent="Raum "+fmtRoom(r); $("sNameShow").textContent="Angemeldet als "+n; }
+    sOpen=!!s.open; sStatus();
+  });
+}
+function leave(){ if(sRoom) unsub(topic(sRoom,"status")); sRoom=null; sOpen=false; store.set("ls-student",null,sessionStorage); showJoined(false); }
+
+function sendSubmission(code, end){
+  if(!sRoom||!sOpen||!client) return;
+  const ok = pub(topic(sRoom,"abgabe"), {v:1, id:sId, name:sName, code, end, shots, t:Date.now()});
+  if(ok) $("sentMsg").textContent = `Schuss ${shots} an deine Lehrkraft geschickt.`;
+}
+
+/* ================= Lehrkraft ================= */
+let tRoom = null, tOpen = true, entries = {}, order = [], tSel = null, tFilter = 0;
+
+function tMsg(t,cls=""){ const m=$("tMsg"); m.textContent=t; m.className="msg "+cls; }
+function connMsg(t,cls=""){ const m=$("tConn"); m.textContent=t; m.className="msg "+cls; }
+const endText = {hit:"Treffer: Der König ist matt.", out:"Kein Treffer: Der Strahl verlässt das Spielfeld.",
+  wall:"Kein Treffer: Der Strahl endet an einer Mauer.", self:"Kein Treffer: Der Strahl läuft zurück zum Laser.", loop:"Kein Treffer: Der Strahl läuft im Kreis."};
+
+function saveEntries(){ store.set("ls-entries-"+tRoom, {entries, order}); }
+function loadEntries(){ const d=store.get("ls-entries-"+tRoom); entries=(d&&d.entries)||{}; order=(d&&Array.isArray(d.order))?d.order.filter(k=>entries[k]):[]; }
+
+function openRoom(newOne){
+  if(tRoom) { pub(topic(tRoom,"status"), null, true); unsub(topic(tRoom,"abgabe")); }
+  if(newOne || !tRoom){
+    const keep = !newOne && store.get("ls-room", sessionStorage);
+    tRoom = (keep && validRoom(keep)) ? keep : rand(6);
+    store.set("ls-room", tRoom, sessionStorage);
+  }
+  tOpen=true; tSel=null; loadEntries();
+  $("tRoom").textContent=fmtRoom(tRoom);
+  drawQR();
+  if(!ensureClient()){ connMsg("Die Verbindung zum Raum-Server konnte nicht aufgebaut werden. Prüfe die Internetverbindung und lade die Seite neu.","bad"); }
+  else { connMsg("Verbinde mit Raum "+fmtRoom(tRoom)+" …"); if(connected) announce(); }
+  sub(topic(tRoom,"abgabe"), onSubmission);
+  renderList(); updateOpenBtn();
+  showTeacherBoard(null);
+}
+function announce(){ if(tRoom) pub(topic(tRoom,"status"), {open:tOpen, t:Date.now()}, true); }
+
+function drawQR(){
+  const box=$("qr"); box.innerHTML="";
+  const url = location.origin + location.pathname + "?raum=" + tRoom;
+  if(location.protocol==="file:"){
+    box.hidden=true;
+    $("qrNote").textContent="Diese Datei ist lokal geöffnet. Damit der QR-Code funktioniert, lade sie auf einen Webspace hoch und öffne sie über dessen Adresse. Der Raumcode funktioniert trotzdem, wenn die Kinder dieselbe Seite öffnen.";
+    return;
+  }
+  box.hidden=false;
+  $("qrNote").textContent="Die Klasse scannt den QR-Code oder öffnet die Seite und gibt den Raumcode ein.";
+  if(typeof QRCode==="undefined"){ box.textContent=url; box.style.lineHeight="1.4"; box.style.color="#000"; return; }
+  new QRCode(box,{text:url,width:400,height:400,colorDark:"#000000",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});
+}
+
+function onSubmission(raw){
+  if(!tOpen) return;
+  let s; try{ s=JSON.parse(raw); }catch(e){ return; }
+  if(!s||typeof s!=="object"||typeof s.id!=="string"||typeof s.code!=="string") return;
+  const name = String(s.name||"").replace(/[\u0000-\u001f]/g,"").slice(0,24) || "Ohne Namen";
+  addEntry(s.id.slice(0,20), name, s.code.slice(0,40), Number.isFinite(s.shots)?Math.min(999,Math.max(0,s.shots|0)):0, "live");
+}
+
+function addEntry(id, name, code, shotCount, src){
+  const d=decode(code); if(d.error) return d;
+  const k=id+"|"+d.lv;
+  const end=resultFor(d.lv,d.mirrors).end;
+  entries[k]={id,name,lv:d.lv,code:encode(d.lv,d.mirrors),end,shots:shotCount,t:Date.now(),src};
+  order=order.filter(x=>x!==k); order.unshift(k);
+  saveEntries(); renderList();
+  return {key:k};
+}
+
+function visibleKeys(){ return order.filter(k=>entries[k] && (!tFilter || entries[k].lv===tFilter-1)); }
+
+function renderList(){
+  const keys=visibleKeys(), list=$("tList"); list.innerHTML="";
+  $("tCount").textContent=`(${order.length})`;
+  const f=$("filter"); f.innerHTML="";
+  ["Alle","Level 1","Level 2","Level 3"].forEach((t,i)=>{
+    const n = i ? order.filter(k=>entries[k].lv===i-1).length : order.length;
+    const b=document.createElement("button"); b.type="button"; b.className="chip"; b.textContent=`${t} (${n})`;
+    b.setAttribute("aria-pressed", tFilter===i?"true":"false");
+    b.addEventListener("click",()=>{ tFilter=i; renderList(); });
+    f.appendChild(b);
+  });
+  if(!keys.length){
+    const p=document.createElement("p"); p.className="empty";
+    p.textContent = order.length ? "Für dieses Level gibt es noch keine Abgaben." : "Noch keine Abgaben. Sobald die Klasse den Laser abfeuert, erscheinen die Versuche hier.";
+    list.appendChild(p);
+  }
+  keys.forEach(k=>{
+    const e=entries[k];
+    const row=document.createElement("div");
+    row.className="entry"; row.tabIndex=0; row.setAttribute("role","button"); row.setAttribute("aria-current",k===tSel?"true":"false");
+    const res=document.createElement("span"); res.className="res "+(e.end==="hit"?"hit":"miss"); res.textContent=e.end==="hit"?"✓":"✗";
+    res.setAttribute("aria-label",e.end==="hit"?"Treffer":"kein Treffer");
+    const nm=document.createElement("span"); nm.className="nm"; nm.textContent=e.name;
+    const lvb=document.createElement("span"); lvb.className="lv"; lvb.textContent="L"+(e.lv+1);
+    const meta=document.createElement("span"); meta.className="meta";
+    meta.textContent = `${e.shots}. Schuss · ${Object.keys(decode(e.code).mirrors||{}).length} Spiegel`;
+    row.append(res,nm,lvb,meta);
+    row.addEventListener("click",()=>showTeacherBoard(k));
+    row.addEventListener("keydown",ev=>{ if(ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); showTeacherBoard(k);} });
+    list.appendChild(row);
+  });
+  $("nextSub").disabled = !keys.length;
+}
+
+function showTeacherBoard(k){
+  animId++; busy=false; won=false; lastBeam=null;
+  tSel = k && entries[k] ? k : null;
+  if(!tSel){
+    mirrors={}; render();
+    $("showing").hidden=true; $("replay").disabled=true;
+    tMsg("Wähle unten eine Abgabe aus."); renderList(); return;
+  }
+  const e=entries[tSel], d=decode(e.code);
+  lv=d.lv; mirrors=d.mirrors; render(); renderList();
+  $("showing").hidden=false; $("showWho").textContent=e.name;
+  $("showMeta").textContent=`Level ${lv+1} · ${placed()} Spiegel`;
+  $("replay").disabled=false;
+  tMsg("Der Strahl läuft …");
+  lastBeam=trace(); drawBeam(lastBeam,true);
+}
+function teacherFinish(b){
+  if(b.end==="hit"){ const k=$("king"); if(k) k.style.transform="rotate(90deg)"; }
+  const n=b.refl.length;
+  tMsg(`${endText[b.end]} ${n} Reflexion${n===1?"":"en"}.`, b.end==="hit"?"good":"bad");
+}
+function updateOpenBtn(){
+  $("toggleOpen").textContent = tOpen ? "Abgabe schließen" : "Abgabe öffnen";
+  if(connected) connMsg(tOpen ? `Raum ${fmtRoom(tRoom)} ist offen. Abgaben kommen live an.` : `Raum ${fmtRoom(tRoom)}: Abgabe geschlossen.`, tOpen?"good":"");
+}
+
+/* ================= Modus & Start ================= */
+connWatchers.push(state=>{
+  if(mode==="teacher"){
+    if(state==="on"){ announce(); updateOpenBtn(); }
+    else if(state==="nolib") connMsg("Die Verbindung zum Raum-Server konnte nicht aufgebaut werden. Prüfe die Internetverbindung und lade die Seite neu.","bad");
+    else connMsg("Keine Verbindung zum Server. Wird erneut versucht …","bad");
+  } else if(sRoom) sStatus();
+});
+
+function setMode(m){
+  mode=m; const t=m==="teacher";
+  $("studentSide").hidden=t; $("teacherSide").hidden=!t; $("levels").hidden=t; $("research").hidden=t;
+  $("sub").textContent = t ? "Lehreransicht: Abgaben live empfangen und Strahlengänge zeigen."
+    : "Stelle Spiegel auf und setze den König mit dem Laserstrahl matt.";
+  $("modeLink").textContent = t ? "Zur Schüleransicht" : "Zur Lehreransicht";
+  $("banner").hidden=true; $("showing").hidden=true;
+  if(t){ if(!tRoom) openRoom(false); else showTeacherBoard(tSel); }
+  else loadLevel(0);
+}
+function route(){ setMode(location.hash==="#lehrer"?"teacher":"student"); }
+
+$("modeLink").addEventListener("click",()=>{ if(mode==="teacher") history.replaceState(null,"",location.pathname+location.search); else location.hash="lehrer"; route(); });
+window.addEventListener("hashchange",route);
+$("joinBtn").addEventListener("click",join);
+$("sName").addEventListener("keydown",e=>{ if(e.key==="Enter") join(); });
+$("sRoom").addEventListener("keydown",e=>{ if(e.key==="Enter") $("sName").focus(); });
+$("leaveBtn").addEventListener("click",leave);
+$("fire").addEventListener("click",fire);
+$("reset").addEventListener("click",()=>loadLevel(lv));
+$("hintBtn").addEventListener("click",()=>{ const t=$("tip"); t.hidden=!t.hidden; $("hintBtn").textContent=t.hidden?"Tipp":"Tipp ausblenden"; });
+$("normals").addEventListener("change",()=>{ if(lastBeam && !busy) drawBeam(lastBeam,false); });
+$("normalsT").addEventListener("change",()=>{ if(lastBeam && !busy) drawBeam(lastBeam,false); });
+$("next").addEventListener("click",()=>loadLevel(lv<LEVELS.length-1?lv+1:0));
+$("replay").addEventListener("click",()=>{ if(tSel) showTeacherBoard(tSel); });
+$("nextSub").addEventListener("click",()=>{
+  const keys=visibleKeys(); if(!keys.length) return;
+  const i=keys.indexOf(tSel); showTeacherBoard(keys[(i+1)%keys.length]);
+});
+$("toggleOpen").addEventListener("click",()=>{ tOpen=!tOpen; announce(); updateOpenBtn(); });
+$("newRoom").addEventListener("click",()=>openRoom(true));
+$("tClear").addEventListener("click",()=>{
+  if($("tClear").dataset.armed!=="1"){ $("tClear").dataset.armed="1"; $("tClear").textContent="Wirklich alle löschen? Nochmal tippen";
+    setTimeout(()=>{ $("tClear").dataset.armed=""; $("tClear").textContent="Neue Runde (alle Abgaben löschen)"; },4000); return; }
+  $("tClear").dataset.armed=""; $("tClear").textContent="Neue Runde (alle Abgaben löschen)";
+  entries={}; order=[]; saveEntries(); showTeacherBoard(null); tMsg("Alle Abgaben gelöscht. Neue Runde kann starten.");
+});
+window.addEventListener("pagehide",()=>{ /* Raumstatus bleibt erhalten, damit ein Neuladen nichts unterbricht */ });
+
+legend();
+(function start(){
+  const params=new URLSearchParams(location.search);
+  const r=normRoom(params.get("raum"));
+  const saved=store.get("ls-student",sessionStorage);
+  route();
+  if(mode==="student"){
+    if(validRoom(r)){ $("sRoom").value=fmtRoom(r); if(saved&&saved.room===r&&saved.name){ $("sName").value=saved.name; join(); } else $("sName").focus(); }
+    else if(saved&&validRoom(saved.room)&&saved.name){ $("sRoom").value=fmtRoom(saved.room); $("sName").value=saved.name; join(); }
+  }
+})();
+</script>
+</body>
+</html>
