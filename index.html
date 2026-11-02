@@ -1,0 +1,1434 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Laserschach Reflexion</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@400;600;800&display=swap">
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+/* Layout: Spielbrett links als Bühne, Steuerspalte rechts; unter 860px gestapelt */
+:root{
+  --bg:#e8edf2; --panel:#ffffff; --ink:#1c2836; --muted:#5a6b7d; --line:#c9d3de;
+  --sq-a:#f4f1ea; --sq-b:#b8c7d6; --frame:#2f4257;
+  --wall:#6c7584; --wall-top:#8a93a2; --king:#d39a1c; --king-dark:#8a5f05;
+  --mirror:#5fb8d6; --mirror-edge:#1f6f8c; --enemy:#7d8794;
+  --laser:#e0232e; --laser-glow:rgba(255,60,60,.35);
+  --super:#8a3ffc; --super-glow:rgba(138,63,252,.35);
+  --wood:#9a5b2a; --wood-dark:#5e3415; --metal:#c9a227;
+  --cage:#39424e; --violet:#5b2bb5; --violet-dark:#34176e;
+  --ok:#2e8a4f; --warn:#b5541b; --accent:#2f6fb0;
+  --f-display:"Lilita One","Arial Rounded MT Bold",system-ui,sans-serif;
+  --f-body:"Nunito",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#121a24; --panel:#1b2532; --ink:#e6edf5; --muted:#9db0c4; --line:#2e3c4d;
+  --sq-a:#2c3a4a; --sq-b:#1f2a37; --frame:#0b1118;
+  --wall:#56606e; --wall-top:#727d8c; --king:#e8b33a; --king-dark:#8a6210;
+  --mirror:#7ed3ee; --mirror-edge:#bfefff; --enemy:#8f99a6;
+  --laser:#ff4a4a; --laser-glow:rgba(255,80,80,.45);
+  --super:#b98cff; --super-glow:rgba(185,140,255,.45);
+  --wood:#b06d36; --wood-dark:#6b3d19; --metal:#e0bb45;
+  --cage:#c3ccd8; --violet:#7a4ad6; --violet-dark:#3e1f80;
+  --ok:#5cc983; --warn:#f09358; --accent:#6aa9e8; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121a24; --panel:#1b2532; --ink:#e6edf5; --muted:#9db0c4; --line:#2e3c4d;
+  --sq-a:#2c3a4a; --sq-b:#1f2a37; --frame:#0b1118;
+  --wall:#56606e; --wall-top:#727d8c; --king:#e8b33a; --king-dark:#8a6210;
+  --mirror:#7ed3ee; --mirror-edge:#bfefff; --enemy:#8f99a6;
+  --laser:#ff4a4a; --laser-glow:rgba(255,80,80,.45);
+  --super:#b98cff; --super-glow:rgba(185,140,255,.45);
+  --wood:#b06d36; --wood-dark:#6b3d19; --metal:#e0bb45;
+  --cage:#c3ccd8; --violet:#7a4ad6; --violet-dark:#3e1f80;
+  --ok:#5cc983; --warn:#f09358; --accent:#6aa9e8; color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:16px;line-height:1.5}
+.wrap{max-width:1140px;margin:0 auto;padding-block:20px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:16px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+h1{font-family:var(--f-display);font-weight:400;font-size:clamp(2rem,5vw,2.8rem);line-height:1;margin:0;letter-spacing:.01em}
+h1 span{color:var(--laser)}
+.sub{margin:4px 0 0;color:var(--muted);font-weight:600}
+button{font:inherit}
+button:focus-visible,.cell:focus-visible,.entry:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+
+/* Tabs */
+.tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:2px solid var(--line)}
+.tab{font-weight:800;border:0;background:transparent;color:var(--muted);padding:10px 16px;border-radius:12px 12px 0 0;cursor:pointer;margin-bottom:-2px;border-bottom:3px solid transparent;font-size:1.02rem}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--laser)}
+.badge{display:inline-block;min-width:1.4em;padding:0 6px;margin-left:4px;border-radius:999px;background:var(--accent);color:#fff;font-size:.78rem;text-align:center;line-height:1.5}
+
+/* Levelwahl */
+.picker{display:flex;gap:10px 18px;flex-wrap:wrap}
+.stage-grp{display:flex;flex-direction:column;gap:4px}
+.stage-grp .label{display:flex;gap:6px;align-items:center}
+.dots{letter-spacing:1px;color:var(--laser)}
+.stage-btns{display:flex;gap:6px}
+.lvl{font-weight:800;border:2px solid var(--line);background:var(--panel);color:var(--ink);border-radius:10px;padding:4px 0 2px;cursor:pointer;display:flex;flex-direction:column;align-items:center;line-height:1.15;width:48px}
+.lvl .st{color:var(--king);letter-spacing:1px;font-size:.7rem;min-height:1.1em}
+.lvl[aria-current="true"]{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
+
+main{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:20px;align-items:start}
+@media (max-width:860px){main{grid-template-columns:minmax(0,1fr)}}
+.stage{position:relative;min-width:0;display:flex;flex-direction:column;gap:10px}
+.board{width:100%;max-width:640px;aspect-ratio:1;display:block;margin:0 auto;border-radius:14px;background:var(--frame);touch-action:manipulation;user-select:none;-webkit-user-select:none}
+.cell{cursor:pointer}
+.cell:hover{filter:brightness(1.08)}
+.board.nocursor .cell{cursor:default}
+.coord{font:700 9px var(--f-body);fill:var(--muted);opacity:.8}
+.showing{max-width:640px;margin:0 auto;width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;font-weight:800}
+.showing .who{font-family:var(--f-display);font-weight:400;font-size:1.5rem}
+
+/* Spielfiguren-Zustände */
+.fx{transform-box:fill-box;transition:transform .6s cubic-bezier(.5,-0.3,.6,1.4),opacity .5s,filter .5s}
+.crown.fallen{transform:rotate(90deg);transform-origin:50% 100%}
+.crown.fake{filter:grayscale(1);opacity:.45}
+.crown .fakemark{opacity:0;transition:opacity .4s}
+.crown.fake .fakemark{opacity:1}
+.cage{transition:opacity .5s,transform .5s;transform-box:fill-box;transform-origin:50% 0}
+.cage.open{opacity:0;transform:translateY(-14px)}
+.crown.shake{animation:shake .45s}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+.wallp.broken{opacity:.18;transform:scale(.7);transform-origin:50% 50%}
+.lid{transition:transform .5s;transform-box:fill-box;transform-origin:0 100%}
+.chest.opened .lid{transform:rotate(-32deg)}
+.chest .keyicon{opacity:0;transition:opacity .4s,transform .5s;transform-box:fill-box}
+.chest.opened .keyicon{opacity:1;transform:translateY(-12px)}
+.treasure .glow{opacity:0;transition:opacity .4s}
+.treasure.opened .glow{opacity:1}
+.edit-mark{font:800 13px var(--f-body)}
+
+.banner{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:var(--panel);border:3px solid var(--king);border-radius:18px;padding:18px 26px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.25);min-width:240px;max-width:90%;display:flex;flex-direction:column;gap:8px;align-items:center}
+.banner h2{font-family:var(--f-display);font-weight:400;font-size:2.2rem;margin:0;color:var(--king)}
+.banner .stars{font-size:1.8rem;letter-spacing:4px;color:var(--king)}
+.banner p{margin:0;color:var(--muted);font-weight:600}
+
+.side{display:flex;flex-direction:column;gap:16px;min-width:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.panel h3{font-family:var(--f-display);font-weight:400;font-size:1.35rem;margin:0}
+.panel p{margin:0}
+.flat{padding:0;border:0;background:transparent;gap:10px}
+.label{font-size:.75rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.counters{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.count{border:1px solid var(--line);border-radius:12px;padding:8px 12px}
+.count b{display:block;font-family:var(--f-display);font-weight:400;font-size:1.9rem;line-height:1.1;font-variant-numeric:tabular-nums}
+.pips{display:flex;gap:5px;margin-top:4px;flex-wrap:wrap}
+.pip{width:14px;height:14px;border-radius:3px;border:2px solid var(--mirror-edge);transform:rotate(45deg)}
+.pip.full{background:var(--mirror)}
+.btn{font-weight:800;border-radius:12px;border:2px solid transparent;padding:12px 16px;cursor:pointer;font-size:1.05rem}
+.btn:disabled{opacity:.5;cursor:default}
+.fire{background:var(--laser);color:#fff;width:100%;font-family:var(--f-display);font-weight:400;font-size:1.4rem;letter-spacing:.03em}
+.primary{background:var(--accent);color:#fff;width:100%}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.ghost{background:transparent;border-color:var(--line);color:var(--ink);flex:1;font-size:.95rem;padding:9px 12px}
+.small{font-size:.88rem;padding:6px 12px;flex:0 0 auto}
+.danger{color:var(--warn)}
+.msg{border-radius:10px;padding:10px 12px;font-weight:700;background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.msg.bad{background:color-mix(in srgb,var(--warn) 15%,transparent);color:var(--warn)}
+.msg.good{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
+.toggle{display:flex;align-items:center;gap:10px;font-weight:700;cursor:pointer}
+.toggle input{width:20px;height:20px;accent-color:var(--accent);flex:0 0 auto}
+.tip{border-left:4px solid var(--king);padding:6px 10px;background:color-mix(in srgb,var(--king) 10%,transparent);border-radius:0 8px 8px 0}
+.how{border:2px solid color-mix(in srgb,var(--super) 45%,var(--line));border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;background:color-mix(in srgb,var(--super) 6%,transparent)}
+.how-item{display:grid;grid-template-columns:34px minmax(0,1fr);gap:10px;align-items:start;font-size:.94rem}
+.how-item svg{width:34px;height:34px}
+.how-item b{display:block}
+.legend{display:grid;grid-template-columns:28px minmax(0,1fr);gap:6px 10px;align-items:center;font-size:.92rem}
+.legend svg{width:28px;height:28px}
+.research{background:var(--panel);border:1px dashed var(--accent);border-radius:16px;padding:16px 18px;display:flex;flex-direction:column;gap:6px}
+.research h3{font-family:var(--f-display);font-weight:400;margin:0;font-size:1.25rem;color:var(--accent)}
+.research ol{margin:0;padding-left:1.3em;max-width:70ch}
+.field{display:flex;flex-direction:column;gap:4px}
+.field input,.field select{font:inherit;font-weight:700;padding:10px 12px;border:2px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);width:100%}
+.mono{font-family:var(--f-mono)!important;text-transform:uppercase;letter-spacing:.08em}
+.joined{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:middle}
+.dot.on{background:var(--ok)} .dot.off{background:var(--warn)}
+.note{font-size:.88rem;color:var(--muted)}
+.roomcode{font:800 clamp(1.8rem,5vw,2.4rem)/1.1 var(--f-mono);letter-spacing:.14em;text-align:center;color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);border-radius:12px;padding:10px}
+.qr{align-self:center;background:#fff;padding:12px;border-radius:12px;line-height:0}
+.qr img,.qr canvas{width:200px;height:200px;max-width:100%}
+.list{display:flex;flex-direction:column;gap:6px;max-height:420px;overflow:auto}
+.entry{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:0 10px;align-items:center;text-align:left;border:2px solid var(--line);background:var(--bg);color:var(--ink);border-radius:10px;padding:8px 10px;cursor:pointer}
+.entry[aria-current="true"]{border-color:var(--accent)}
+.entry .res{font-weight:800;font-size:1.15rem;grid-row:span 2;min-width:1em;text-align:center}
+.entry .res.hit{color:var(--ok)} .entry .res.miss{color:var(--warn)} .entry .res.none{color:var(--muted)}
+.entry .nm{font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.entry .meta{font-size:.82rem;color:var(--muted);grid-column:2}
+.entry .side-r{grid-row:1/span 2;grid-column:3;display:flex;gap:6px;align-items:center}
+.lv{font-weight:800;font-size:.8rem;border:1px solid var(--line);border-radius:6px;padding:2px 6px}
+.tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:2px}
+.tag{font-size:.72rem;font-weight:800;border-radius:6px;padding:1px 6px;background:color-mix(in srgb,var(--super) 14%,transparent);color:var(--ink)}
+.empty{color:var(--muted);font-size:.92rem;border:1px dashed var(--line);border-radius:10px;padding:12px;margin:0}
+.foot{display:flex;justify-content:flex-end}
+.link{font-weight:700;background:none;border:0;color:var(--accent);text-decoration:underline;cursor:pointer;padding:4px}
+.h-row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+
+/* Werkstatt */
+.steps{display:flex;gap:6px;flex-wrap:wrap}
+.step{font-size:.8rem;font-weight:800;padding:3px 10px;border-radius:999px;border:2px solid var(--line);color:var(--muted)}
+.step.on{border-color:var(--accent);color:var(--ink);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.step.done{border-color:var(--ok);color:var(--ok)}
+.tools{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px}
+.tool{display:flex;flex-direction:column;align-items:center;gap:2px;border:2px solid var(--line);background:var(--bg);color:var(--ink);border-radius:10px;padding:6px 4px;cursor:pointer;font-weight:800;font-size:.8rem;line-height:1.15;text-align:center}
+.tool svg{width:30px;height:30px}
+.tool[aria-pressed="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+
+/* Erklärfenster */
+.modal-bg{position:fixed;inset:0;background:rgba(10,16,24,.55);display:flex;align-items:center;justify-content:center;z-index:50;padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.modal{background:var(--panel);color:var(--ink);border-radius:20px;padding:22px;max-width:520px;width:100%;max-height:100%;overflow:auto;display:flex;flex-direction:column;gap:14px;border:3px solid var(--super)}
+.modal h2{font-family:var(--f-display);font-weight:400;margin:0;font-size:1.8rem}
+.modal .ill{display:flex;gap:12px;justify-content:center}
+.modal .ill svg{width:72px;height:72px}
+.modal p{margin:0}
+.modal ol{margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:6px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Laser<span>schach</span></h1>
+      <p class="sub" id="sub">Stelle Spiegel auf und setze den König mit dem Laserstrahl matt.</p>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Spielmodus">
+    <button class="tab" role="tab" id="tab-adventure" data-tab="adventure" type="button">Abenteuer</button>
+    <button class="tab" role="tab" id="tab-workshop" data-tab="workshop" type="button">Level-Werkstatt</button>
+    <button class="tab" role="tab" id="tab-class" data-tab="class" type="button">Klassen-Level<span class="badge" id="classBadge" hidden>0</span></button>
+  </nav>
+
+  <div class="picker" id="picker" aria-label="Level wählen"></div>
+
+  <main>
+    <div class="stage">
+      <div class="showing" id="showing" hidden>
+        <span class="who" id="showWho"></span>
+        <span id="showMeta"></span>
+      </div>
+      <svg class="board" id="board" viewBox="-14 -14 508 508" role="img" aria-label="Spielfeld 8 mal 8"></svg>
+      <div class="banner" id="banner" hidden>
+        <h2 id="bTitle">Schachmatt!</h2>
+        <div class="stars" id="bStars"></div>
+        <p id="bText"></p>
+        <button class="btn fire" id="next" type="button">Nächstes Level</button>
+      </div>
+    </div>
+
+    <!-- Schüleransicht -->
+    <div class="side" id="studentSide">
+      <section class="panel" id="roomPanel">
+        <div id="joinForm" class="panel flat">
+          <h3>Lehrerraum beitreten</h3>
+          <div class="field"><label class="label" for="sRoom">Raumcode</label><input id="sRoom" class="mono" autocomplete="off" spellcheck="false" maxlength="9" placeholder="z. B. K7Q-2MX"></div>
+          <div class="field"><label class="label" for="sName">Vorname oder Kürzel</label><input id="sName" autocomplete="off" maxlength="24" placeholder="z. B. Lea K."></div>
+          <button class="btn primary" id="joinBtn" type="button">Beitreten</button>
+          <div class="msg" id="joinMsg" hidden aria-live="polite"></div>
+          <p class="note">Ohne Raum kannst du auch einfach so spielen.</p>
+        </div>
+        <div id="joinedBox" hidden>
+          <div class="joined">
+            <div><span class="dot" id="sDot"></span><b id="sRoomShow"></b><div class="note" id="sNameShow"></div></div>
+            <button class="btn ghost small" id="leaveBtn" type="button">Ändern</button>
+          </div>
+          <div class="note" id="sentMsg" aria-live="polite" style="margin-top:8px;font-weight:700">Jeder Schuss wird automatisch an deine Lehrkraft geschickt.</div>
+        </div>
+      </section>
+
+      <!-- Werkstatt -->
+      <section class="panel" id="workshopPanel" hidden>
+        <div class="h-row">
+          <h3>Level-Werkstatt</h3>
+        </div>
+        <div class="steps" aria-label="Schritte">
+          <span class="step" id="st1">1 Bauen</span><span class="step" id="st2">2 Selbst lösen</span><span class="step" id="st3">3 Teilen</span>
+        </div>
+
+        <div id="wsBuild" class="panel flat">
+          <p>Wähle ein Werkzeug und tippe auf das Spielfeld. Noch einmal tippen entfernt eine Mauer oder Krone.</p>
+          <div class="tools" id="tools" role="group" aria-label="Werkzeuge"></div>
+          <div class="msg" id="wsMsg" aria-live="polite">Werkzeug: Mauer</div>
+          <div class="how" id="wsRules">
+            <div class="label">Regeln für dein Level</div>
+            <p class="note" style="color:var(--ink)">Es gibt genau einen König. Stellst du eine Truhe auf, sitzt der König im Käfig. Der Laser steht immer in einer Ecke. Mit dem Laser-Werkzeug stellst du ihn um oder drehst ihn.</p>
+            <p class="note" style="color:var(--ink)">In der Werkstatt siehst du die Verwirrungskronen mit Fragezeichen. Beim Spielen sehen sie aus wie der echte König.</p>
+          </div>
+          <div class="row">
+            <button class="btn ghost" id="wsClear" type="button">Feld leeren</button>
+            <button class="btn primary" id="wsTest" type="button" style="flex:2">Selbst lösen</button>
+          </div>
+        </div>
+
+        <div id="wsTestBox" class="panel flat" hidden>
+          <p>Löse dein Level selbst. Nur Level, die du geschafft hast, kannst du teilen. Du hast bis zu 6 Spiegel.</p>
+          <button class="btn ghost" id="wsBack" type="button">Zurück zum Bauen</button>
+        </div>
+
+        <div id="wsShare" class="panel flat" hidden>
+          <div class="msg good" id="wsSolvedMsg"></div>
+          <div class="field"><label class="label" for="wsName">Name deines Levels</label><input id="wsName" autocomplete="off" maxlength="24" placeholder="z. B. Spiegelfalle"></div>
+          <button class="btn primary" id="wsPublish" type="button">Im Raum teilen</button>
+          <div class="msg" id="wsShareMsg" hidden aria-live="polite"></div>
+          <div class="row">
+            <button class="btn ghost" id="wsBack2" type="button">Weiter bauen</button>
+            <button class="btn ghost" id="wsNew" type="button">Neues Level</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Klassen-Level -->
+      <section class="panel" id="classPanel" hidden>
+        <h3>Level der Klasse</h3>
+        <p class="note" id="classIntro">Hier erscheinen die Level, die deine Mitschülerinnen und Mitschüler in der Werkstatt gebaut haben.</p>
+        <div class="list" id="classList"></div>
+      </section>
+
+      <!-- Spielen -->
+      <aside class="panel" id="playPanel">
+        <div>
+          <div class="label" id="lvLabel">Level 1</div>
+          <h3 id="lvTitle"></h3>
+          <p id="lvText"></p>
+        </div>
+        <div class="how" id="how" hidden>
+          <div class="h-row"><div class="label">So funktioniert dieses Level</div><button class="link small" id="howMore" type="button" hidden>Erklärung ansehen</button></div>
+          <div id="howItems" style="display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+        <div class="counters">
+          <div class="count"><span class="label">Züge übrig</span><b id="moves">2</b><div class="pips" id="pips"></div></div>
+          <div class="count"><span class="label">Schüsse</span><b id="shots">0</b></div>
+        </div>
+        <button class="btn fire" id="fire" type="button">Laser abfeuern</button>
+        <div class="msg" id="msg" aria-live="polite">Tippe auf ein freies Feld, um einen Spiegel aufzustellen.</div>
+        <label class="toggle"><input type="checkbox" id="normals"> Lot und Winkel einblenden</label>
+        <div class="row">
+          <button class="btn ghost" id="reset" type="button">Neu starten</button>
+          <button class="btn ghost" id="hintBtn" type="button">Tipp</button>
+        </div>
+        <p class="tip" id="tip" hidden></p>
+        <div>
+          <div class="label" style="margin-bottom:6px">Was ist was?</div>
+          <div class="legend" id="legend"></div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Lehreransicht -->
+    <div class="side" id="teacherSide" hidden>
+      <section class="panel">
+        <h3>Live-Raum</h3>
+        <div class="roomcode" id="tRoom">–</div>
+        <div class="qr" id="qr"></div>
+        <p class="note" id="qrNote">Die Klasse scannt den QR-Code oder öffnet die Seite und gibt den Raumcode ein.</p>
+        <div class="msg" id="tConn" aria-live="polite">Verbinde …</div>
+        <p class="note">Abgaben und Klassen-Level laufen über einen öffentlichen Server (HiveMQ). Lass nur Vornamen oder Kürzel eintragen.</p>
+        <button class="btn ghost" id="newRoom" type="button">Neuen Raum erstellen</button>
+      </section>
+
+      <section class="panel">
+        <h3>Strahlengang zeigen</h3>
+        <div class="row">
+          <button class="btn primary" id="replay" type="button" style="flex:1" disabled>Strahl abspielen</button>
+          <button class="btn ghost" id="nextSub" type="button" disabled>Nächste Abgabe</button>
+        </div>
+        <label class="toggle"><input type="checkbox" id="normalsT"> Lot und Winkel einblenden</label>
+        <div class="msg" id="tMsg" aria-live="polite">Wähle unten eine Abgabe oder ein Klassen-Level aus.</div>
+      </section>
+
+      <section class="panel">
+        <div class="h-row">
+          <h3>Abgaben <span class="note" id="tCount">(0)</span></h3>
+          <button class="btn ghost small" id="toggleOpen" type="button">Abgabe schließen</button>
+        </div>
+        <div class="field"><label class="label" for="tFilter">Anzeigen</label><select id="tFilter"></select></div>
+        <div class="list" id="tList"></div>
+        <button class="btn ghost danger" id="tClear" type="button">Neue Runde (alle Abgaben löschen)</button>
+      </section>
+
+      <section class="panel">
+        <div class="h-row">
+          <h3>Klassen-Level <span class="note" id="tlCount">(0)</span></h3>
+        </div>
+        <label class="toggle"><input type="checkbox" id="tShare" checked> Schüler dürfen Level teilen</label>
+        <div class="list" id="tLevels"></div>
+        <button class="btn ghost danger" id="tLevelsClear" type="button">Alle Klassen-Level löschen</button>
+      </section>
+    </div>
+  </main>
+
+  <section class="research" id="research">
+    <h3>Forscherauftrag</h3>
+    <ol>
+      <li>Schau dir genau an, wie der Strahl am Spiegel abknickt. Schalte dafür „Lot und Winkel einblenden“ ein.</li>
+      <li>Die gestrichelte Linie heißt <b>Lot</b>. Sie steht senkrecht auf dem Spiegel.</li>
+      <li>Vergleiche den Winkel zwischen ankommendem Strahl und Lot mit dem Winkel zwischen abgehendem Strahl und Lot. Was fällt dir auf?</li>
+    </ol>
+  </section>
+  <div class="foot"><button class="link" id="modeLink" type="button">Zur Lehreransicht</button></div>
+</div>
+
+<div class="modal-bg" id="modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+    <div class="label" id="mEyebrow">Neu in diesem Level</div>
+    <h2 id="mTitle"></h2>
+    <div class="ill" id="mIll" aria-hidden="true"></div>
+    <div id="mBody" style="display:flex;flex-direction:column;gap:10px"></div>
+    <button class="btn primary" id="mOk" type="button">Verstanden, los geht's</button>
+  </div>
+</div>
+
+<script>
+/* ================= Einstellungen ================= */
+const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+const TOPIC_BASE = "laserschach-reflexion/v1";
+const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // ohne 0/O, 1/I
+const C = 60, NS = "http://www.w3.org/2000/svg";
+const FILES = "ABCDEFGH";
+const MAX_TEST_MIRRORS = 6;
+
+/*ENGINE-START*/
+const N = 8;
+const DIRS = { N:[0,-1], E:[1,0], S:[0,1], W:[-1,0] };
+const GRID_CACHE = new WeakMap();
+function gridOf(l){
+  let g = GRID_CACHE.get(l); if(g) return g;
+  g = new Array(N*N).fill(0);
+  const put = (p,v) => { if(p) g[p[1]*N+p[0]] = v; };
+  l.walls.forEach(w => put(w,"W"));
+  (l.fixed||[]).forEach(f => put(f,f[2]));
+  (l.decoys||[]).forEach(d => put(d,"D"));
+  put(l.chest,"C"); put(l.treasure,"T"); put(l.king,"K");
+  g[l.laser.y*N+l.laser.x] = "L";
+  GRID_CACHE.set(l,g); return g;
+}
+// Verfolgt den Strahl. mget(index) liefert "/" oder "\\" für Spielerspiegel.
+function traceLevel(l, mget){
+  const g = gridOf(l), locked = !!l.chest;
+  let x = l.laser.x, y = l.laser.y, [dx,dy] = DIRS[l.laser.dir];
+  let key = false, power = false, step = 0, lastMirror = -1;
+  const pts = [[x+.5,y+.5]], events = [], refl = [], path = [], broken = [];
+  const R = end => ({end, pts, events, refl, path, lastMirror, broken, key, power});
+  const ev = (type) => { pts.push([x+.5,y+.5]); events.push({type, x, y, pt:pts.length-1}); };
+  for(let i=0;i<220;i++){
+    const px = x, py = y; x += dx; y += dy; step++;
+    if(x<0||y<0||x>=N||y>=N){ pts.push([px+.5+dx*.5, py+.5+dy*.5]); return R("out"); }
+    const idx = y*N+x, o = g[idx];
+    if(o==="W" && !broken.includes(idx)){
+      if(!power){ pts.push([x+.5-dx*.42, y+.5-dy*.42]); return R("wall"); }
+      broken.push(idx); ev("break");
+    } else if(o==="K"){
+      if(locked && !key){ pts.push([x+.5-dx*.3, y+.5-dy*.3]); events.push({type:"locked",x,y,pt:pts.length-1}); return R("locked"); }
+      ev("hit"); return R("hit");
+    } else if(o==="D"){ ev("decoy"); return R("decoy"); }
+    else if(o==="L"){ pts.push([x+.5-dx*.37, y+.5-dy*.37]); return R("self"); }
+    else if(o==="C"){ if(!key){ key = true; ev("key"); } }
+    else if(o==="T"){ if(!power){ power = true; ev("power"); } }
+    else if(o==="W"){ /* bereits zerschossene Mauer */ }
+    else {
+      const t = (o==="/"||o==="\\") ? o : mget(idx);
+      if(t){
+        if(o===0) lastMirror = step;
+        const inD = [dx,dy];
+        if(t==="/") [dx,dy] = [-dy,-dx]; else [dx,dy] = [dy,dx];
+        pts.push([x+.5,y+.5]); refl.push({x, y, t, inD, outD:[dx,dy], fixed:o!==0});
+      } else path.push({idx, step});
+    }
+  }
+  return R("loop");
+}
+/*ENGINE-END*/
+
+/* ================= Erklärungen ================= */
+const MECH = {
+  chest: { name:"Truhe und Käfig", short:"Truhe mit Schlüssel",
+    text:"Der König sitzt im Käfig. Dein Laserstrahl muss zuerst durch die Truhe laufen. Darin liegt der Schlüssel. Erst dann geht der Käfig auf und der Strahl kann den König treffen.",
+    steps:["Der Strahl läuft einfach durch die Truhe hindurch und nimmt dabei den Schlüssel mit.","Danach ist der Käfig offen.","Trifft der Strahl den König ohne Schlüssel, prallt er am Käfig ab."] },
+  decoy: { name:"Verwirrungskronen", short:"Verwirrungskronen",
+    text:"Auf dem Feld stehen mehrere Kronen. Sie sehen alle gleich aus, aber nur eine ist der echte König. Mit deinen Zügen gibt es nur einen Weg, und der führt zum echten König. Die anderen Kronen kannst du gar nicht erreichen.",
+    textCustom:"Auf dem Feld stehen mehrere Kronen. Sie sehen alle gleich aus, aber nur eine ist der echte König. Triffst du eine Verwirrungskrone, stoppt der Strahl und die Krone wird grau.",
+    steps:["Überlege zuerst: Welche Krone kann ich mit meinen Zügen überhaupt erreichen?","Zähle dafür, wie viele Ecken der Strahl bis zu jeder Krone bräuchte. Jede Ecke kostet einen Spiegel.","Nur bei einer Krone reichen deine Züge. Das ist der echte König.","Triffst du doch eine Verwirrungskrone, stoppt der Strahl und die Krone wird grau."] },
+  treasure: { name:"Die Schatzkiste", short:"Schatzkiste (Superlaser)",
+    text:"Läuft dein Strahl durch die Schatzkiste, wird er zum lila Superlaser. Der Superlaser zerschießt jede Mauer, die danach in seinem Weg liegt, und fliegt weiter.",
+    steps:["Mauern vor der Schatzkiste halten den normalen Laser auf.","Spiegel lenken den Superlaser genauso um wie den normalen Laser.","Den König musst du trotzdem mit Spiegeln erreichen."] },
+  fixed: { name:"Gegnerische Spiegel", short:"Gegnerischer Spiegel",
+    text:"Graue Spiegel gehören dem Gegner. Sie lenken deinen Strahl genauso um, lassen sich aber nicht bewegen.", steps:[] }
+};
+function mechsOf(l){
+  const m = [];
+  if(l.chest) m.push("chest");
+  if((l.decoys||[]).length) m.push("decoy");
+  if(l.treasure) m.push("treasure");
+  if((l.fixed||[]).length) m.push("fixed");
+  return m;
+}
+
+/* ================= Level ================= */
+const STAGES = [
+  { name:"Grundlagen", dots:1 }, { name:"Schlüssel", dots:2 }, { name:"Verwirrung", dots:2 },
+  { name:"Superlaser", dots:3 }, { name:"Meister", dots:4 }
+];
+/*LEVELS-START*/
+const LEVELS = [
+  { stage:0, title:"Um die Ecke", zuege:2,
+    text:"Der Laser steht unten links und schießt nach oben. Lenke den Strahl mit 2 Spiegeln zum König.",
+    tip:"Ein Spiegel lenkt den Strahl um eine Ecke. Du brauchst zwei Ecken: erst nach rechts, dann wieder nach oben.",
+    laser:{x:0,y:7,dir:"N"}, king:[6,1], walls:[[3,1],[3,5],[5,3]], fixed:[], decoys:[], chest:null, treasure:null },
+  { stage:0, title:"Angriff von oben", zuege:3,
+    text:"Der König hat sich hinter Mauern versteckt. Nur von oben ist er ungeschützt. Du hast 3 Züge.",
+    tip:"Bring den Strahl zuerst ganz nach oben. Dann quer hinüber und von oben auf den König.",
+    laser:{x:7,y:7,dir:"W"}, king:[2,2], walls:[[3,2],[2,3],[1,2],[4,0],[4,5],[1,5]], fixed:[], decoys:[], chest:null, treasure:null },
+  { stage:0, title:"Die große Runde", zuege:4,
+    text:"Der graue Spiegel gehört dem Gegner und lässt sich nicht bewegen. Pass auf, dass er dich nicht in die Irre führt. Du hast 4 Züge.",
+    tip:"Der Weg führt einmal im großen Bogen über das Spielfeld: runter, nach rechts, nach oben, nach links und zum Schluss von oben auf den König.",
+    laser:{x:0,y:0,dir:"S"}, king:[5,3], walls:[[4,3],[5,4],[6,3],[4,0],[2,2],[3,2],[2,7],[7,0],[1,1],[7,6]], fixed:[[5,0,"/"]], decoys:[], chest:null, treasure:null },
+  { stage:1, title:"Der Schlüssel", zuege:2, intro:"chest",
+    text:"Der König sitzt im Käfig. Hol mit deinem Strahl zuerst den Schlüssel aus der Truhe. Du hast 2 Züge.",
+    tip:"Lenke den Strahl gleich am Anfang nach links durch die Truhe. Danach brauchst du nur noch eine Ecke nach oben.",
+    laser:{x:7,y:7,dir:"N"}, king:[3,5], walls:[[2,7],[1,2],[0,6],[3,3],[5,0]], fixed:[], decoys:[], chest:[5,6], treasure:null },
+  { stage:1, title:"Schlüssel-Umweg", zuege:3,
+    text:"Wieder sitzt der König im Käfig. Diesmal ist der Weg über die Truhe ein richtiger Umweg. Du hast 3 Züge.",
+    tip:"Der Strahl muss von oben durch die Truhe laufen. Suche zuerst die Spalte, in der die Truhe steht.",
+    laser:{x:7,y:0,dir:"S"}, king:[3,6], walls:[[6,6],[3,1],[1,5],[4,1],[0,4],[7,5],[5,2]], fixed:[], decoys:[], chest:[2,4], treasure:null },
+  { stage:2, title:"Drei Kronen", zuege:3, intro:"decoy",
+    text:"Drei Kronen, aber nur eine ist der echte König. Finde die Krone, die du mit 3 Zügen erreichen kannst.",
+    tip:"Überlege für jede Krone, wie viele Ecken der Strahl bis dorthin bräuchte. Nur bei einer reichen 3 Spiegel.",
+    laser:{x:0,y:7,dir:"E"}, king:[5,4], walls:[[1,5],[0,4],[7,2],[5,3],[1,1],[6,0],[4,2],[2,7],[7,0],[6,5]], fixed:[], decoys:[[1,3],[6,3]], chest:null, treasure:null },
+  { stage:2, title:"Kronen-Labyrinth", zuege:4,
+    text:"Vier Kronen und viele Mauern. Nur eine Krone ist mit 4 Zügen erreichbar. Das ist der echte König.",
+    tip:"Der echte König steht nicht bei den anderen Kronen. Der Weg führt über die oberste Reihe.",
+    laser:{x:0,y:0,dir:"S"}, king:[6,1], walls:[[6,3],[4,3],[1,7],[1,2],[0,3],[0,2],[5,1],[0,4],[2,1]], fixed:[], decoys:[[1,6],[4,7],[4,5]], chest:null, treasure:null },
+  { stage:3, title:"Superlaser", zuege:3, intro:"treasure",
+    text:"Der König hat sich eingemauert. Nur der Superlaser kommt durch die Mauern. Du hast 3 Züge.",
+    tip:"Schick den Strahl zuerst nach oben durch die Schatzkiste. Danach darf er ruhig auf eine Mauer zielen.",
+    laser:{x:0,y:7,dir:"E"}, king:[4,5], walls:[[5,5],[3,5],[4,6],[4,4],[2,4],[2,2],[3,6],[7,0],[6,0],[3,1],[1,5],[1,3],[4,1]], fixed:[], decoys:[], chest:null, treasure:[7,3] },
+  { stage:3, title:"Mauerbrecher", zuege:4,
+    text:"Die Schatzkiste liegt weit weg vom Laser. Hol dir den Superlaser und brich zum König durch. Du hast 4 Züge.",
+    tip:"Bring den Strahl in die Reihe der Schatzkiste. Danach fliegt der Superlaser einen Bogen zum König.",
+    laser:{x:7,y:0,dir:"W"}, king:[4,5], walls:[[5,5],[3,5],[4,6],[4,4],[3,1],[2,2],[5,7],[4,1],[3,2],[2,3],[7,3],[6,5]], fixed:[], decoys:[], chest:null, treasure:[2,4] },
+  { stage:4, title:"Kronenwald", zuege:4,
+    text:"Der König sitzt im Käfig und versteckt sich zwischen Verwirrungskronen. Hol den Schlüssel und finde die echte Krone. Du hast 4 Züge.",
+    tip:"Die Truhe steht schräg neben dem echten König.",
+    laser:{x:0,y:0,dir:"S"}, king:[4,4], walls:[[1,0],[1,1],[2,2],[0,3],[4,3],[5,3],[7,1],[7,0],[7,4],[7,6],[6,7]], fixed:[], decoys:[[2,1],[7,3]], chest:[3,5], treasure:null },
+  { stage:4, title:"Kronen hinter Mauern", zuege:5,
+    text:"Drei Kronen stehen dicht beieinander, gut eingemauert. Nur der Superlaser kommt an sie heran. Du hast 5 Züge.",
+    tip:"Hol den Superlaser unten rechts. Der echte König wird von rechts getroffen.",
+    laser:{x:0,y:0,dir:"S"}, king:[1,5], walls:[[2,5],[1,4],[4,5],[5,2],[6,3],[0,4],[7,2],[3,5],[2,2],[1,1],[3,6],[2,6],[4,7]], fixed:[], decoys:[[1,6],[0,5]], chest:null, treasure:[7,6] },
+  { stage:4, title:"Das Finale", zuege:4,
+    text:"Alles zusammen: Schatzkiste, Truhe und Verwirrungskronen. Und du hast nur 4 Züge.",
+    tip:"Schatzkiste und Truhe liegen in derselben Reihe. Ein einziger gerader Strahl kann beide holen.",
+    laser:{x:0,y:0,dir:"E"}, king:[5,6], walls:[[6,6],[5,5],[2,0],[6,5],[2,3],[6,7],[4,1],[3,1],[7,1],[7,3],[3,4],[1,6],[1,4],[6,1],[7,5],[7,7],[0,3],[3,3],[2,6]], fixed:[], decoys:[[5,7],[2,5],[4,6]], chest:[6,2], treasure:[4,2] }
+];
+/*LEVELS-END*/
+
+/* ================= Zustand ================= */
+const $ = id => document.getElementById(id);
+const board = $("board");
+const store = {
+  get(k, s=localStorage){ try { return JSON.parse(s.getItem(k)); } catch(e){ return null; } },
+  set(k, v, s=localStorage){ try { s.setItem(k, JSON.stringify(v)); } catch(e){} }
+};
+let mode = "student", tab = "adventure";
+let cur = LEVELS[0], ref = {kind:"campaign", i:0};
+let mirrors = {}, shots = 0, won = false, busy = false, lastBeam = null, animId = 0, revealed = new Set();
+let progress = store.get("ls-stars2"); if(!Array.isArray(progress)) progress = [];
+let solvedClass = new Set(store.get("ls-solved-class")||[]);
+let introSeen = new Set(store.get("ls-intro-seen")||[]);
+
+const key = (x,y) => x+","+y;
+const L = () => cur;
+const placed = () => Object.keys(mirrors).length;
+const at = (p,x,y) => p && p[0]===x && p[1]===y;
+function occupantOf(l,x,y){
+  if(l.laser.x===x&&l.laser.y===y) return "laser";
+  if(at(l.king,x,y)) return "king";
+  if(at(l.chest,x,y)) return "chest";
+  if(at(l.treasure,x,y)) return "treasure";
+  if((l.decoys||[]).some(d=>at(d,x,y))) return "decoy";
+  if(l.walls.some(w=>at(w,x,y))) return "wall";
+  if((l.fixed||[]).some(f=>at(f,x,y))) return "fixed";
+  return null;
+}
+const isPlay = () => mode==="student" && ref.kind!=="build";
+const maxMirrors = () => ref.kind==="test" ? MAX_TEST_MIRRORS : cur.zuege;
+const showNormals = () => $(mode==="teacher"?"normalsT":"normals").checked;
+function trace(){ return traceLevel(cur, i => mirrors[(i%N)+","+Math.floor(i/N)]); }
+
+/* ================= Lösungscodes (intern) ================= */
+function mirrorsToCode(mm){
+  return Object.keys(mm).map(k=>{ const [x,y]=k.split(",").map(Number); return {x,y,t:mm[k]}; })
+    .sort((a,b)=>a.x-b.x||b.y-a.y)
+    .map(m=>FILES[m.x]+(8-m.y)+(m.t==="/"?"R":"L")).join("-");
+}
+function codeToMirrors(code, l){
+  const s = String(code||"").toUpperCase().replace(/\s/g,"");
+  if(s==="") return {mirrors:{}};
+  if(!/^[A-H][1-8][RL](-[A-H][1-8][RL])*$/.test(s)) return {error:"unlesbar"};
+  const out = {};
+  for(const p of s.split("-")){
+    const x = FILES.indexOf(p[0]), y = 8-Number(p[1]), k = key(x,y);
+    if(occupantOf(l,x,y) || out[k]) return {error:"Feld belegt"};
+    out[k] = p[2]==="R" ? "/" : "\\";
+  }
+  return {mirrors:out};
+}
+const encode = () => (ref.kind==="campaign" ? (ref.i+1) : 0) + (placed()? "-"+mirrorsToCode(mirrors) : "");
+function decode(raw){
+  const m = String(raw).match(/^(\d{1,2})(?:-(.*))?$/);
+  if(!m) return {error:"unlesbar"};
+  const lv = Number(m[1])-1; if(!LEVELS[lv]) return {error:"Level fehlt"};
+  const r = codeToMirrors(m[2]||"", LEVELS[lv]); if(r.error) return r;
+  if(Object.keys(r.mirrors).length > LEVELS[lv].zuege) return {error:"zu viele Spiegel"};
+  return {lv, mirrors:r.mirrors};
+}
+
+/* ================= Zeichnen ================= */
+function el(tag, attrs={}, parent){ const e=document.createElementNS(NS,tag); for(const k in attrs) e.setAttribute(k,attrs[k]); if(parent) parent.appendChild(e); return e; }
+
+function drawMirror(g, x, y, t, enemy){
+  const cx=x*C+C/2, cy=y*C+C/2, r=C*0.36;
+  const [x1,y1,x2,y2] = t==="/" ? [cx-r,cy+r,cx+r,cy-r] : [cx-r,cy-r,cx+r,cy+r];
+  el("line",{x1,y1,x2,y2,stroke:enemy?"var(--enemy)":"var(--mirror-edge)","stroke-width":11,"stroke-linecap":"round"},g);
+  el("line",{x1,y1,x2,y2,stroke:enemy?"var(--sq-a)":"var(--mirror)","stroke-width":6,"stroke-linecap":"round"},g);
+  if(enemy) el("circle",{cx,cy,r:5,fill:"var(--enemy)"},g);
+}
+function drawWall(g,x,y){
+  const px=x*C+5, py=y*C+5, s=C-10;
+  const w = el("g",{class:"wallp fx",id:`w-${x}-${y}`},g);
+  el("rect",{x:px,y:py,width:s,height:s,rx:6,fill:"var(--wall)"},w);
+  el("rect",{x:px+4,y:py+4,width:s-8,height:s-14,rx:4,fill:"var(--wall-top)"},w);
+  el("path",{d:`M${px+4} ${py+s/2-2}h${s-8}M${px+s/2} ${py+4}v${s/2-6}M${px+s/4} ${py+s/2-2}v${s/2-8}M${px+3*s/4} ${py+s/2-2}v${s/2-8}`,stroke:"var(--wall)","stroke-width":2,fill:"none"},w);
+}
+function crownShape(g,cx,cy){
+  el("ellipse",{cx,cy:cy+21,rx:17,ry:4,fill:"var(--king-dark)",opacity:.35},g);
+  el("path",{d:`M${cx-15} ${cy+19} L${cx-17} ${cy-6} L${cx-8} ${cy+2} L${cx} ${cy-12} L${cx+8} ${cy+2} L${cx+17} ${cy-6} L${cx+15} ${cy+19} Z`,fill:"var(--king)",stroke:"var(--king-dark)","stroke-width":2.5,"stroke-linejoin":"round"},g);
+  el("path",{d:`M${cx} ${cy-25}v10M${cx-5} ${cy-20}h10`,stroke:"var(--king-dark)","stroke-width":3,"stroke-linecap":"round"},g);
+  el("rect",{x:cx-15,y:cy+11,width:30,height:6,rx:2,fill:"var(--king-dark)"},g);
+}
+function drawCrown(g,x,y,{caged,editDecoy,fake}){
+  const cx=x*C+C/2, cy=y*C+C/2;
+  const k = el("g",{class:"crown fx"+(fake?" fake":""),id:`k-${x}-${y}`},g);
+  crownShape(k,cx,cy);
+  const fm = el("g",{class:"fakemark"},k);
+  el("path",{d:`M${cx-10} ${cy-4}l20 20M${cx+10} ${cy-4}l-20 20`,stroke:"var(--warn)","stroke-width":4,"stroke-linecap":"round"},fm);
+  if(caged){
+    const cg = el("g",{class:"cage"},g);
+    el("rect",{x:cx-24,y:cy-28,width:48,height:54,rx:6,fill:"none",stroke:"var(--cage)","stroke-width":3},cg);
+    for(const dx of [-12,0,12]) el("line",{x1:cx+dx,y1:cy-28,x2:cx+dx,y2:cy+26,stroke:"var(--cage)","stroke-width":3},cg);
+    el("rect",{x:cx+11,y:cy+12,width:14,height:12,rx:2,fill:"var(--metal)",stroke:"var(--cage)","stroke-width":1.5},cg);
+    el("path",{d:`M${cx+14} ${cy+12}v-4a4 4 0 0 1 8 0v4`,fill:"none",stroke:"var(--cage)","stroke-width":2},cg);
+  }
+  if(editDecoy){
+    el("circle",{cx:cx+18,cy:cy-20,r:10,fill:"var(--super)"},g);
+    el("text",{x:cx+18,y:cy-15.5,"text-anchor":"middle",class:"edit-mark",fill:"#fff"},g).textContent="?";
+  }
+}
+function drawChest(g,x,y){
+  const cx=x*C+C/2, cy=y*C+C/2;
+  const c = el("g",{class:"chest",id:"chest"},g);
+  const key = el("g",{class:"keyicon"},c);
+  el("circle",{cx:cx-6,cy:cy-12,r:5,fill:"none",stroke:"var(--metal)","stroke-width":3},key);
+  el("path",{d:`M${cx-1} ${cy-12}h13m-4 0v4m-4-4v3`,stroke:"var(--metal)","stroke-width":3,"stroke-linecap":"round",fill:"none"},key);
+  el("rect",{x:cx-19,y:cy-4,width:38,height:24,rx:3,fill:"var(--wood)",stroke:"var(--wood-dark)","stroke-width":2},c);
+  el("rect",{x:cx-19,y:cy+4,width:38,height:3,fill:"var(--wood-dark)"},c);
+  const lid = el("g",{class:"lid"},c);
+  el("path",{d:`M${cx-19} ${cy-4} v-6 a6 6 0 0 1 6 -6 h26 a6 6 0 0 1 6 6 v6 z`,fill:"var(--wood)",stroke:"var(--wood-dark)","stroke-width":2},lid);
+  el("rect",{x:cx-4,y:cy-2,width:8,height:10,rx:2,fill:"var(--metal)"},c);
+  el("circle",{cx,cy:cy+2,r:1.6,fill:"var(--wood-dark)"},c);
+}
+function drawTreasure(g,x,y){
+  const cx=x*C+C/2, cy=y*C+C/2;
+  const t = el("g",{class:"treasure",id:"treasure"},g);
+  el("circle",{class:"glow",cx,cy,r:27,fill:"var(--super-glow)"},t);
+  el("rect",{x:cx-20,y:cy-8,width:40,height:26,rx:4,fill:"var(--violet)",stroke:"var(--violet-dark)","stroke-width":2},t);
+  el("path",{d:`M${cx-20} ${cy-8} v-4 a8 8 0 0 1 8 -8 h24 a8 8 0 0 1 8 8 v4 z`,fill:"var(--violet)",stroke:"var(--violet-dark)","stroke-width":2},t);
+  el("path",{d:`M${cx-20} ${cy-8}h40M${cx-12} ${cy-20}v38M${cx+12} ${cy-20}v38`,stroke:"var(--metal)","stroke-width":3},t);
+  el("path",{d:`M${cx+2} ${cy-6} l-7 11 h6 l-3 10 l9 -13 h-6 l3 -8z`,fill:"var(--metal)",stroke:"var(--violet-dark)","stroke-width":1},t);
+}
+function drawLaser(g,l){
+  const cx=l.laser.x*C+C/2, cy=l.laser.y*C+C/2, [dx,dy]=DIRS[l.laser.dir];
+  const gg = el("g",{transform:`translate(${cx} ${cy}) rotate(${Math.atan2(dy,dx)*180/Math.PI})`},g);
+  el("rect",{x:-22,y:-20,width:40,height:40,rx:8,fill:"var(--frame)"},gg);
+  el("rect",{x:-14,y:-12,width:24,height:24,rx:5,fill:"var(--wall-top)"},gg);
+  el("rect",{x:8,y:-6,width:20,height:12,rx:3,fill:"var(--frame)"},gg);
+  el("circle",{cx:27,cy:0,r:4,fill:"var(--laser)"},gg);
+  el("circle",{cx:-2,cy:0,r:5,fill:"var(--laser)"},gg);
+}
+
+function render(){
+  board.innerHTML="";
+  const l=L(), build = ref.kind==="build", interactive = mode==="student";
+  board.classList.toggle("nocursor", !interactive);
+  el("rect",{x:-14,y:-14,width:508,height:508,rx:14,fill:"var(--frame)"},board);
+  const cells = el("g",{},board);
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    const r = el("rect",{x:x*C,y:y*C,width:C,height:C,fill:(x+y)%2?"var(--sq-b)":"var(--sq-a)",class:"cell",
+      "aria-label":`Feld ${"abcdefgh"[x]}${8-y}`},cells);
+    if(interactive){
+      r.setAttribute("tabindex","0");
+      r.addEventListener("click",()=>onCell(x,y));
+      r.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onCell(x,y);} });
+    }
+  }
+  const labels = el("g",{"pointer-events":"none"},board);
+  for(let i=0;i<N;i++){
+    el("text",{x:i*C+C-4,y:N*C-4,"text-anchor":"end",class:"coord"},labels).textContent="abcdefgh"[i];
+    el("text",{x:3,y:i*C+11,class:"coord"},labels).textContent=8-i;
+  }
+  const pieces = el("g",{"pointer-events":"none"},board);
+  l.walls.forEach(([x,y])=>drawWall(pieces,x,y));
+  (l.fixed||[]).forEach(([x,y,t])=>drawMirror(pieces,x,y,t,true));
+  if(l.chest) drawChest(pieces,l.chest[0],l.chest[1]);
+  if(l.treasure) drawTreasure(pieces,l.treasure[0],l.treasure[1]);
+  for(const k in mirrors){ const [x,y]=k.split(",").map(Number); drawMirror(pieces,x,y,mirrors[k],false); }
+  const caged = !!l.chest;
+  (l.decoys||[]).forEach(([x,y])=>drawCrown(pieces,x,y,{caged,editDecoy:build,fake:revealed.has(key(x,y))}));
+  if(l.king) drawCrown(pieces,l.king[0],l.king[1],{caged,fake:false});
+  drawLaser(pieces,l);
+  el("g",{id:"beamLayer","pointer-events":"none"},board);
+  if(lastBeam) drawBeam(lastBeam,false);
+  updatePanel();
+}
+
+/* ================= Strahl ================= */
+function applyEvent(e){
+  const q = id => document.getElementById(id);
+  if(e.type==="key"){ q("chest")?.classList.add("opened"); board.querySelectorAll(".cage").forEach(c=>c.classList.add("open")); }
+  else if(e.type==="power") q("treasure")?.classList.add("opened");
+  else if(e.type==="break") q(`w-${e.x}-${e.y}`)?.classList.add("broken");
+  else if(e.type==="decoy"){ q(`k-${e.x}-${e.y}`)?.classList.add("fake"); revealed.add(key(e.x,e.y)); }
+  else if(e.type==="locked"){ const k=q(`k-${e.x}-${e.y}`); if(k){ k.classList.remove("shake"); k.getBoundingClientRect(); k.classList.add("shake"); } }
+  else if(e.type==="hit") q(`k-${e.x}-${e.y}`)?.classList.add("fallen");
+}
+function drawBeam(b, animate){
+  const layer=$("beamLayer"); layer.innerHTML="";
+  const P = b.pts.map(([x,y])=>[x*C,y*C]);
+  const pw = b.events.find(e=>e.type==="power");
+  const segs = pw ? [{pts:P.slice(0,pw.pt+1),sup:false},{pts:P.slice(pw.pt),sup:true}] : [{pts:P,sup:false}];
+  const cum=[0]; for(let i=1;i<P.length;i++) cum.push(cum[i-1]+Math.hypot(P[i][0]-P[i-1][0],P[i][1]-P[i-1][1]));
+  const total = cum[cum.length-1] || 1;
+  const paths = segs.filter(s=>s.pts.length>1).map(s=>{
+    const d = s.pts.map((p,i)=>(i?"L":"M")+p[0]+" "+p[1]).join("");
+    const glow = el("path",{d,stroke:s.sup?"var(--super-glow)":"var(--laser-glow)","stroke-width":s.sup?16:12,fill:"none","stroke-linecap":"round","stroke-linejoin":"round"},layer);
+    const core = el("path",{d,stroke:s.sup?"var(--super)":"var(--laser)","stroke-width":s.sup?5:3.5,fill:"none","stroke-linecap":"round","stroke-linejoin":"round"},layer);
+    return {glow,core,len:core.getTotalLength()};
+  });
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const id = ++animId;
+  if(animate && !reduce){
+    const slow = mode==="teacher" ? 2.6 : 1.6;
+    const dur = Math.min(mode==="teacher"?5200:3400, 300 + total*slow);
+    let off = 0;
+    paths.forEach(p=>{
+      const delay = dur*off/total, d = dur*p.len/total; off += p.len;
+      [p.glow,p.core].forEach(e=>{ e.style.strokeDasharray=p.len; e.style.strokeDashoffset=p.len; e.getBoundingClientRect();
+        e.style.transition=`stroke-dashoffset ${d}ms linear ${delay}ms`; e.style.strokeDashoffset=0; });
+    });
+    b.events.forEach(e=>setTimeout(()=>{ if(id===animId) applyEvent(e); }, dur*cum[e.pt]/total));
+    setTimeout(()=>{ if(id!==animId) return; if(showNormals()) drawNormals(b); finish(b); }, dur+80);
+  } else {
+    b.events.forEach(applyEvent);
+    if(showNormals()) drawNormals(b);
+    if(animate) finish(b);
+  }
+}
+function drawNormals(b){
+  const layer=$("beamLayer");
+  b.refl.forEach(r=>{
+    const cx=r.x*C+C/2, cy=r.y*C+C/2;
+    let n = r.t==="/" ? [1,1] : [1,-1];
+    if(n[0]*r.inD[0]+n[1]*r.inD[1] > 0) n=[-n[0],-n[1]];
+    n=[n[0]*Math.SQRT1_2,n[1]*Math.SQRT1_2];
+    el("line",{x1:cx,y1:cy,x2:cx+n[0]*40,y2:cy+n[1]*40,stroke:"var(--ink)","stroke-width":2,"stroke-dasharray":"4 4"},layer);
+    const back=[-r.inD[0],-r.inD[1]], out=r.outD, R=20;
+    [back,out].forEach((v,i)=>{
+      const a1=Math.atan2(v[1],v[0]), a2=Math.atan2(n[1],n[0]);
+      const p1=[cx+R*Math.cos(a1),cy+R*Math.sin(a1)], p2=[cx+R*Math.cos(a2),cy+R*Math.sin(a2)];
+      const cross=v[0]*n[1]-v[1]*n[0];
+      el("path",{d:`M${p1[0]} ${p1[1]} A${R} ${R} 0 0 ${cross>0?1:0} ${p2[0]} ${p2[1]}`,stroke:i?"var(--accent)":"var(--king-dark)","stroke-width":3,fill:"none"},layer);
+      const mid=[v[0]+n[0],v[1]+n[1]], ml=Math.hypot(mid[0],mid[1]);
+      const tx=cx+mid[0]/ml*31, ty=cy+mid[1]/ml*31;
+      el("circle",{cx:tx,cy:ty,r:10,fill:"var(--panel)",opacity:.9},layer);
+      el("text",{x:tx,y:ty+4,"text-anchor":"middle",style:"font:800 10px var(--f-body)",fill:"var(--ink)"},layer).textContent="45°";
+    });
+  });
+}
+
+/* ================= Spielen ================= */
+function setMsg(t,cls=""){ const m=$("msg"); m.textContent=t; m.className="msg "+cls; }
+function onCell(x,y){ if(ref.kind==="build") return buildTap(x,y); tap(x,y); }
+
+function tap(x,y){
+  if(!isPlay()||busy||won) return;
+  const o = occupantOf(cur,x,y);
+  const msgs = { wall:"Hier steht eine Mauer. Dort passt kein Spiegel hin.", king:"Das ist eine Krone. Die musst du mit dem Laser treffen!",
+    decoy:"Das ist eine Krone. Die musst du mit dem Laser treffen!", laser:"Das ist dein Laser. Er bleibt in seiner Ecke stehen.",
+    fixed:"Dieser graue Spiegel gehört dem Gegner. Du kannst ihn nicht bewegen.",
+    chest:"Auf der Truhe kann kein Spiegel stehen. Dein Strahl soll durch sie hindurchlaufen.",
+    treasure:"Auf der Schatzkiste kann kein Spiegel stehen. Dein Strahl soll durch sie hindurchlaufen." };
+  if(o) return setMsg(msgs[o],"bad");
+  const k=key(x,y);
+  if(!mirrors[k]){
+    if(placed()>=maxMirrors()) return setMsg("Keine Züge mehr übrig. Nimm einen Spiegel weg oder drehe einen.","bad");
+    mirrors[k]="/"; setMsg("Spiegel gesetzt. Tippe ihn noch einmal an, um ihn zu drehen.");
+  } else if(mirrors[k]==="/"){ mirrors[k]="\\"; setMsg("Spiegel gedreht. Noch einmal antippen nimmt ihn weg."); }
+  else { delete mirrors[k]; setMsg("Spiegel weggenommen. Du hast den Zug zurück."); }
+  lastBeam=null; render();
+}
+
+function fire(){
+  if(!isPlay()||busy||won) return;
+  busy=true; shots++; lastBeam=trace(); updatePanel();
+  setMsg(lastBeam.power ? "Laser feuert … Superlaser!" : "Laser feuert …");
+  if(ref.kind==="campaign") sendSubmission(encode(), lastBeam.end);
+  drawBeam(lastBeam,true);
+}
+
+const END_TEXT = {
+  out:"Daneben! Der Strahl hat das Spielfeld verlassen. Verändere deine Spiegel und versuche es noch einmal.",
+  wall:"Der Strahl ist an einer Mauer gestoppt. Mauern lassen kein Licht durch.",
+  self:"Autsch! Der Strahl ist zu deinem eigenen Laser zurückgekommen.",
+  loop:"Der Strahl läuft im Kreis. Ändere einen Spiegel.",
+  decoy:"Täuschung! Das war eine Verwirrungskrone. Der echte König steht woanders.",
+  locked:"Der König sitzt im Käfig. Dein Strahl muss zuerst durch die Truhe mit dem Schlüssel."
+};
+function finish(b){
+  busy=false;
+  if(mode==="teacher") return teacherFinish(b);
+  if(b.end!=="hit"){
+    let t = END_TEXT[b.end];
+    if(b.end==="wall" && cur.treasure && !b.power) t = "Der Strahl ist an einer Mauer gestoppt. Hol dir zuerst den Superlaser aus der Schatzkiste.";
+    setMsg(t,"bad"); updatePanel(); return;
+  }
+  won=true; updatePanel();
+  setMsg("Treffer! Der König ist matt.","good");
+  if(ref.kind==="test") return testSolved();
+  const stars = shots===1?3:shots<=3?2:1;
+  if(ref.kind==="campaign"){ progress[ref.i]=Math.max(progress[ref.i]||0,stars); store.set("ls-stars2",progress); renderPicker(); }
+  if(ref.kind==="class"){ solvedClass.add(ref.id); store.set("ls-solved-class",[...solvedClass]); renderClassList(); }
+  setTimeout(()=>{
+    if(!won) return;
+    $("bTitle").textContent="Schachmatt!";
+    $("bStars").textContent="★".repeat(stars)+"☆".repeat(3-stars);
+    $("bText").textContent = `Geschafft mit ${placed()} Spiegel${placed()===1?"":"n"} und ${shots} Schuss${shots===1?"":"en"}.`;
+    if(ref.kind==="campaign") $("next").textContent = ref.i<LEVELS.length-1 ? "Nächstes Level" : "Nochmal von vorn";
+    else $("next").textContent = "Zurück zu den Klassen-Leveln";
+    $("banner").hidden=false;
+  },700);
+}
+
+function resetPlayState(){
+  mirrors={}; shots=0; won=false; busy=false; lastBeam=null; animId++; revealed=new Set();
+  $("banner").hidden=true; $("tip").hidden=true; $("hintBtn").textContent="Tipp";
+}
+function loadCampaign(i){
+  ref={kind:"campaign",i}; cur=LEVELS[i]; resetPlayState();
+  setMsg("Tippe auf ein freies Feld, um einen Spiegel aufzustellen.");
+  render(); renderPicker(); renderHow();
+  store.set("ls-last-level", i);
+  if(cur.intro && !introSeen.has(cur.intro)) openIntro(cur.intro);
+}
+function loadClassLevel(id){
+  const e = classLevels.get(id); if(!e) return;
+  ref={kind:"class",id}; cur=e.level; resetPlayState();
+  setMsg("Tippe auf ein freies Feld, um einen Spiegel aufzustellen.");
+  render(); renderHow(); renderClassList();
+  const ms = mechsOf(cur).filter(m=>m!=="fixed" && !introSeen.has(m));
+  if(ms.length) openIntro(ms[0]);
+}
+
+function updatePanel(){
+  const l=L(), max=maxMirrors(), left=max-placed();
+  let label="", title=l.title||"", text=l.text||"";
+  if(ref.kind==="campaign"){ const st=STAGES[l.stage]; label=`Level ${ref.i+1} von ${LEVELS.length} · ${st.name}`; }
+  else if(ref.kind==="class"){ label="Klassen-Level"; title=l.title; text=`Gebaut von ${l.author}. Der Ersteller hat es mit ${l.zuege} Spiegel${l.zuege===1?"":"n"} geschafft. Du hast genauso viele Züge.`; }
+  else if(ref.kind==="test"){ label="Werkstatt · Selbst lösen"; title="Dein Level"; text="Setze Spiegel und feuere den Laser ab."; }
+  $("lvLabel").textContent=label; $("lvTitle").textContent=title; $("lvText").textContent=text;
+  $("tip").textContent=l.tip||""; $("hintBtn").hidden=!l.tip;
+  $("moves").textContent=left; $("shots").textContent=shots;
+  $("pips").innerHTML=Array.from({length:max},(_,i)=>`<span class="pip${i<left?" full":""}"></span>`).join("");
+  $("fire").disabled=busy||won;
+}
+
+/* ---------- Erklärungen und Legende ---------- */
+function iconSvg(kind){
+  const s = document.createElementNS(NS,"svg"); s.setAttribute("viewBox","0 0 60 60"); s.setAttribute("aria-hidden","true");
+  const g = el("g",{transform:"translate(0 0)"},s);
+  const fake = {walls:[],laser:{x:9,y:9,dir:"N"}};
+  if(kind==="chest") drawChest(g,0,0);
+  else if(kind==="treasure") drawTreasure(g,0,0);
+  else if(kind==="king") drawCrown(g,0,0,{});
+  else if(kind==="cage") drawCrown(g,0,0,{caged:true});
+  else if(kind==="decoy"){ drawCrown(g,0,0,{}); }
+  else if(kind==="decoyEdit"){ drawCrown(g,0,0,{editDecoy:true}); }
+  else if(kind==="wall") drawWall(g,0,0);
+  else if(kind==="mirror"){ el("rect",{x:4,y:4,width:52,height:52,rx:8,fill:"var(--sq-a)"},g); drawMirror(g,0,0,"/",false); }
+  else if(kind==="fixed"){ el("rect",{x:4,y:4,width:52,height:52,rx:8,fill:"var(--sq-a)"},g); drawMirror(g,0,0,"\\",true); }
+  else if(kind==="laser"){ drawLaser(g,{laser:{x:0,y:0,dir:"E"}}); }
+  else if(kind==="erase"){ el("path",{d:"M14 40 L34 16 L48 28 L30 48 H18 Z",fill:"var(--sq-b)",stroke:"var(--ink)","stroke-width":3,"stroke-linejoin":"round"},g); el("path",{d:"M24 30 L38 42",stroke:"var(--ink)","stroke-width":3},g); }
+  [...s.querySelectorAll("[id]")].forEach(n=>n.removeAttribute("id"));
+  return s;
+}
+function renderHow(){
+  const ms = mechsOf(cur);
+  $("how").hidden = !ms.length;
+  const box=$("howItems"); box.innerHTML="";
+  ms.forEach(m=>{
+    const d=document.createElement("div"); d.className="how-item";
+    d.appendChild(iconSvg(m==="decoy"?"decoy":m));
+    const t=document.createElement("div"); const b=document.createElement("b"); b.textContent=MECH[m].name;
+    const p=document.createElement("span"); p.textContent=(cur.custom||ref.kind==="test")&&MECH[m].textCustom ? MECH[m].textCustom : MECH[m].text;
+    t.append(b,p); d.appendChild(t); box.appendChild(d);
+  });
+  const introKind = ms.find(m=>m!=="fixed");
+  $("howMore").hidden = !introKind; $("howMore").dataset.kind = introKind||"";
+  renderLegend(ms);
+}
+function renderLegend(ms){
+  const items=[["mirror","Dein Spiegel. Antippen: setzen, drehen, wegnehmen. Jeder Spiegel kostet einen Zug."]];
+  if(ms.includes("fixed")) items.push(["fixed","Gegnerischer Spiegel. Er spiegelt auch, ist aber festgeschraubt."]);
+  items.push(["wall", cur.treasure ? "Mauer. Der normale Laser stoppt hier, der Superlaser zerschießt sie." : "Mauer. Hier endet der Strahl."]);
+  if(ms.includes("chest")){ items.push(["chest","Truhe mit Schlüssel. Der Strahl läuft hindurch und holt den Schlüssel."]); items.push(["cage","König im Käfig. Erst mit Schlüssel kann er getroffen werden."]); }
+  else items.push(["king","König. Triff ihn mit dem Laserstrahl!"]);
+  if(ms.includes("decoy")) items.push(["decoy","Mehrere Kronen: Nur eine ist der echte König."]);
+  if(ms.includes("treasure")) items.push(["treasure","Schatzkiste. Der Strahl läuft hindurch und wird zum Superlaser."]);
+  const lg=$("legend"); lg.innerHTML="";
+  items.forEach(([k,t])=>{ lg.appendChild(iconSvg(k)); const s=document.createElement("span"); s.textContent=t; lg.appendChild(s); });
+}
+let modalReturn=null;
+function openIntro(kind){
+  const m=MECH[kind]; if(!m) return;
+  modalReturn=document.activeElement;
+  $("mEyebrow").textContent = introSeen.has(kind) ? "Erklärung" : "Neu in diesem Level";
+  $("mTitle").textContent=m.name;
+  const ill=$("mIll"); ill.innerHTML="";
+  if(kind==="chest"){ ill.append(iconSvg("chest"),iconSvg("cage")); }
+  else if(kind==="decoy"){ ill.append(iconSvg("king"),iconSvg("king"),iconSvg("king")); }
+  else if(kind==="treasure"){ ill.append(iconSvg("treasure"),iconSvg("wall")); }
+  const body=$("mBody"); body.innerHTML="";
+  const p=document.createElement("p"); p.textContent=(cur.custom||ref.kind==="test")&&m.textCustom ? m.textCustom : m.text; body.appendChild(p);
+  if(m.steps.length){ const ol=document.createElement("ol"); m.steps.forEach(s=>{ const li=document.createElement("li"); li.textContent=s; ol.appendChild(li); }); body.appendChild(ol); }
+  introSeen.add(kind); store.set("ls-intro-seen",[...introSeen]);
+  $("modal").hidden=false; $("mOk").focus();
+}
+function closeIntro(){ $("modal").hidden=true; if(modalReturn&&modalReturn.focus) modalReturn.focus(); }
+
+/* ---------- Levelwahl ---------- */
+function renderPicker(){
+  const p=$("picker"); p.innerHTML="";
+  STAGES.forEach((st,si)=>{
+    const g=document.createElement("div"); g.className="stage-grp";
+    const lab=document.createElement("div"); lab.className="label";
+    lab.innerHTML=`<span class="dots" aria-hidden="true">${"●".repeat(st.dots)}${"○".repeat(4-st.dots)}</span>`;
+    lab.append(document.createTextNode(st.name));
+    const bs=document.createElement("div"); bs.className="stage-btns";
+    LEVELS.forEach((l,i)=>{ if(l.stage!==si) return;
+      const b=document.createElement("button"); b.className="lvl"; b.type="button";
+      b.setAttribute("aria-current", ref.kind==="campaign"&&ref.i===i ? "true":"false");
+      b.setAttribute("aria-label",`Level ${i+1}: ${l.title}${progress[i]?`, ${progress[i]} Sterne`:""}`);
+      b.innerHTML=`${i+1}<span class="st">${progress[i]?"★".repeat(progress[i]):""}</span>`;
+      b.addEventListener("click",()=>loadCampaign(i));
+      bs.appendChild(b);
+    });
+    g.append(lab,bs); p.appendChild(g);
+  });
+}
+
+/* ================= Werkstatt ================= */
+const TOOLS = [
+  {id:"wall",label:"Mauer",icon:"wall"},{id:"king",label:"König",icon:"king"},{id:"decoy",label:"Verwirrungs­krone",icon:"decoyEdit"},
+  {id:"chest",label:"Truhe",icon:"chest"},{id:"treasure",label:"Schatz­kiste",icon:"treasure"},{id:"laser",label:"Laser",icon:"laser"},{id:"erase",label:"Radierer",icon:"erase"}
+];
+const DEFAULT_DRAFT = () => ({laser:{x:0,y:7,dir:"N"}, king:[5,2], walls:[[3,2],[3,5]], decoys:[], chest:null, treasure:null, fixed:[]});
+let draft = store.get("ls-draft"); if(!validDraftShape(draft)) draft = DEFAULT_DRAFT();
+let tool = "wall", wsStep = "build", wsSolution = null;
+function validDraftShape(d){ return d && d.laser && Array.isArray(d.walls) && Array.isArray(d.decoys); }
+function saveDraft(){ store.set("ls-draft", draft); }
+function draftLevel(){
+  const d = draft;
+  return { title:"Dein Level", zuege:MAX_TEST_MIRRORS, laser:{...d.laser}, king:d.king?[...d.king]:null,
+    walls:d.walls.map(w=>[...w]), decoys:d.decoys.map(w=>[...w]), chest:d.chest?[...d.chest]:null,
+    treasure:d.treasure?[...d.treasure]:null, fixed:[] };
+}
+function wsMsg(t,cls=""){ const m=$("wsMsg"); m.textContent=t; m.className="msg "+cls; }
+const CORNERS = {"0,0":["S","E"],"7,0":["S","W"],"0,7":["N","E"],"7,7":["N","W"]};
+
+function clearCell(x,y){
+  draft.walls = draft.walls.filter(p=>!at(p,x,y));
+  draft.decoys = draft.decoys.filter(p=>!at(p,x,y));
+  if(at(draft.chest,x,y)) draft.chest=null;
+  if(at(draft.treasure,x,y)) draft.treasure=null;
+  if(at(draft.king,x,y)) draft.king=null;
+}
+function buildTap(x,y){
+  const isLaserCell = draft.laser.x===x && draft.laser.y===y;
+  const name = TOOLS.find(t=>t.id===tool).label.replace(/­/g,"");
+  if(tool==="laser"){
+    const c = CORNERS[key(x,y)];
+    if(!c) return wsMsg("Der Laser kann nur in einer Ecke stehen.","bad");
+    if(isLaserCell){ draft.laser.dir = c[(c.indexOf(draft.laser.dir)+1)%2]; wsMsg("Laser gedreht."); }
+    else { clearCell(x,y); draft.laser={x,y,dir:c[0]}; wsMsg("Laser umgestellt. Tippe ihn noch einmal an, um ihn zu drehen."); }
+  } else if(isLaserCell){
+    return wsMsg("Hier steht der Laser. Nimm das Laser-Werkzeug, um ihn umzustellen oder zu drehen.","bad");
+  } else if(tool==="erase"){ clearCell(x,y); wsMsg("Feld geleert."); }
+  else if(tool==="wall"){
+    if(draft.walls.some(p=>at(p,x,y))){ clearCell(x,y); wsMsg("Mauer entfernt."); }
+    else { if(draft.walls.length>=30) return wsMsg("Mehr als 30 Mauern gehen nicht.","bad"); clearCell(x,y); draft.walls.push([x,y]); wsMsg("Mauer gesetzt."); }
+  } else if(tool==="decoy"){
+    if(draft.decoys.some(p=>at(p,x,y))){ clearCell(x,y); wsMsg("Verwirrungskrone entfernt."); }
+    else { if(draft.decoys.length>=4) return wsMsg("Mehr als 4 Verwirrungskronen gehen nicht.","bad"); clearCell(x,y); draft.decoys.push([x,y]); wsMsg("Verwirrungskrone gesetzt."); }
+  } else {
+    clearCell(x,y); draft[tool]=[x,y];
+    wsMsg(tool==="chest" ? "Truhe gesetzt. Jetzt sitzt der König im Käfig." : `${name} gesetzt.`);
+  }
+  wsSolution=null; saveDraft(); cur=draftLevel(); render(); updateSteps();
+}
+function renderTools(){
+  const t=$("tools"); t.innerHTML="";
+  TOOLS.forEach(tl=>{
+    const b=document.createElement("button"); b.type="button"; b.className="tool"; b.setAttribute("aria-pressed",tl.id===tool?"true":"false");
+    b.appendChild(iconSvg(tl.icon)); const s=document.createElement("span"); s.innerHTML=tl.label; b.appendChild(s);
+    b.addEventListener("click",()=>{ tool=tl.id; renderTools(); wsMsg(`Werkzeug: ${tl.label.replace(/­/g,"")}`); });
+    t.appendChild(b);
+  });
+}
+function updateSteps(){
+  $("st1").className="step "+(wsStep==="build"?"on":"done");
+  $("st2").className="step "+(wsStep==="test"?"on":wsStep==="share"?"done":"");
+  $("st3").className="step "+(wsStep==="share"?"on":"");
+  $("wsBuild").hidden = wsStep!=="build"; $("wsTestBox").hidden = wsStep!=="test"; $("wsShare").hidden = wsStep!=="share";
+  $("playPanel").hidden = tab==="workshop" && wsStep==="build";
+}
+function enterBuild(){
+  wsStep="build"; ref={kind:"build"}; cur=draftLevel(); resetPlayState(); render(); updateSteps(); renderTools();
+}
+function startTest(){
+  if(!draft.king) return wsMsg("Stell zuerst einen König auf das Feld.","bad");
+  wsStep="test"; ref={kind:"test"}; cur=draftLevel(); resetPlayState();
+  setMsg("Tippe auf ein freies Feld, um einen Spiegel aufzustellen.");
+  render(); renderHow(); updateSteps();
+}
+function testSolved(){
+  if(placed()===0){ won=false; setMsg("Treffer, aber ganz ohne Spiegel. Baue Mauern ein, damit man Spiegel braucht.","bad"); updatePanel(); return; }
+  wsSolution = {code:mirrorsToCode(mirrors), count:placed()};
+  wsStep="share"; updateSteps();
+  $("wsSolvedMsg").textContent=`Geschafft! Du hast ${wsSolution.count} Spiegel gebraucht. Deine Mitschüler bekommen genauso viele Züge.`;
+  $("wsShareMsg").hidden=true;
+  updateShareBtn();
+}
+function updateShareBtn(){
+  const b=$("wsPublish");
+  b.disabled = !(sRoom && sFound && sShare);
+  const m=$("wsShareMsg");
+  if(wsStep!=="share") return;
+  if(!sRoom||!sFound){ m.hidden=false; m.className="msg"; m.textContent="Tritt oben einem Raum bei, damit du dein Level mit der Klasse teilen kannst."; }
+  else if(!sShare){ m.hidden=false; m.className="msg"; m.textContent="Deine Lehrkraft hat das Teilen gerade ausgeschaltet."; }
+  else if(m.dataset.state!=="sent") m.hidden=true;
+}
+function publishLevel(){
+  const name=cleanText($("wsName").value);
+  if(!name) { const m=$("wsShareMsg"); m.hidden=false; m.className="msg bad"; m.textContent="Gib deinem Level einen Namen."; return; }
+  if(!wsSolution||!sRoom||!sShare) return;
+  const id=rand(8);
+  const d=draftLevel();
+  const payload={v:1,id,name,author:sName,by:sId,zuege:wsSolution.count,sol:wsSolution.code,t:Date.now(),
+    level:{laser:d.laser,king:d.king,walls:d.walls,decoys:d.decoys,chest:d.chest,treasure:d.treasure}};
+  pub(topic(sRoom,"levels/"+id), payload, true);
+  const mine=new Set(store.get("ls-my-levels")||[]); mine.add(id); store.set("ls-my-levels",[...mine]);
+  const m=$("wsShareMsg"); m.hidden=false; m.className="msg good"; m.dataset.state="sent";
+  m.textContent=`„${name}“ ist geteilt. Deine Mitschüler finden es unter Klassen-Level.`;
+  $("wsPublish").disabled=true;
+}
+
+/* ================= Klassen-Level ================= */
+const classLevels = new Map(); // id -> {id,name,author,by,zuege,sol,t,level}
+function cleanText(s){ return String(s||"").replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩]/g,"").replace(/\s+/g," ").trim().slice(0,24); }
+function sanitizeLevel(o){
+  try{
+    if(!o||typeof o!=="object"||o.v!==1) return null;
+    const id=String(o.id||""); if(!/^[A-Z0-9]{6,12}$/.test(id)) return null;
+    const P=p=>Array.isArray(p)&&p.length===2&&p.every(n=>Number.isInteger(n)&&n>=0&&n<8)?[p[0],p[1]]:null;
+    const L0=o.level||{}, ls=L0.laser||{};
+    const c=CORNERS[key(ls.x,ls.y)]; if(!c||!c.includes(ls.dir)) return null;
+    const king=P(L0.king); if(!king) return null;
+    if(!Array.isArray(L0.walls)||L0.walls.length>30||!Array.isArray(L0.decoys)||L0.decoys.length>4) return null;
+    const walls=L0.walls.map(P), decoys=L0.decoys.map(P);
+    if(walls.includes(null)||decoys.includes(null)) return null;
+    const chest=L0.chest==null?null:P(L0.chest), treasure=L0.treasure==null?null:P(L0.treasure);
+    if((L0.chest!=null&&!chest)||(L0.treasure!=null&&!treasure)) return null;
+    const all=[key(ls.x,ls.y),key(...king),...walls.map(p=>key(...p)),...decoys.map(p=>key(...p))];
+    if(chest) all.push(key(...chest)); if(treasure) all.push(key(...treasure));
+    if(new Set(all).size!==all.length) return null;
+    const zuege=o.zuege; if(!Number.isInteger(zuege)||zuege<1||zuege>MAX_TEST_MIRRORS) return null;
+    const name=cleanText(o.name)||"Ohne Namen", author=cleanText(o.author)||"Unbekannt";
+    const level={title:name,author,zuege,laser:{x:ls.x,y:ls.y,dir:ls.dir},king,walls,decoys,chest,treasure,fixed:[],custom:true};
+    const sol=codeToMirrors(o.sol,level); if(sol.error||Object.keys(sol.mirrors).length!==zuege) return null;
+    if(traceLevel(level,i=>sol.mirrors[(i%N)+","+Math.floor(i/N)]).end!=="hit") return null; // nur lösbare Level
+    return {id,name,author,by:String(o.by||"").slice(0,20),zuege,sol:String(o.sol),t:Number(o.t)||0,level};
+  }catch(e){ return null; }
+}
+function onLevelMsg(t, raw){
+  const id=t.split("/").pop();
+  if(!raw){ classLevels.delete(id); }
+  else { let o=null; try{ o=JSON.parse(raw); }catch(e){} const s=sanitizeLevel(o); if(!s||s.id!==id) return; classLevels.set(id,s); }
+  renderClassList(); if(mode==="teacher") renderTeacherLevels();
+  if(ref.kind==="class" && !classLevels.has(ref.id) && mode==="student"){ setMsg("Dieses Level wurde gelöscht.","bad"); }
+}
+const sortedLevels = () => [...classLevels.values()].sort((a,b)=>b.t-a.t);
+function tagsOf(l){ return mechsOf(l).filter(m=>m!=="fixed").map(m=>({chest:"Schlüssel",decoy:"Kronen",treasure:"Superlaser"})[m]); }
+function renderClassList(){
+  const n=classLevels.size; $("classBadge").hidden=!n; $("classBadge").textContent=n;
+  const list=$("classList"); if(!list) return; list.innerHTML="";
+  if(!sRoom||!sFound){ $("classIntro").textContent="Tritt oben einem Raum bei. Dann siehst du hier die Level, die deine Klasse gebaut hat."; }
+  else $("classIntro").textContent="Hier erscheinen die Level, die deine Mitschülerinnen und Mitschüler in der Werkstatt gebaut haben.";
+  if(!n){ const p=document.createElement("p"); p.className="empty"; p.textContent=sFound?"Noch keine Level geteilt. Bau doch selbst eins in der Level-Werkstatt!":"Noch keine Level."; list.appendChild(p); return; }
+  const mine=new Set(store.get("ls-my-levels")||[]);
+  sortedLevels().forEach(e=>{
+    const row=document.createElement("div"); row.className="entry"; row.tabIndex=0; row.setAttribute("role","button");
+    row.setAttribute("aria-current", ref.kind==="class"&&ref.id===e.id ? "true":"false");
+    const res=document.createElement("span"); const ok=solvedClass.has(e.id);
+    res.className="res "+(ok?"hit":"none"); res.textContent=ok?"✓":"▸"; res.setAttribute("aria-label",ok?"geschafft":"noch offen");
+    const nm=document.createElement("span"); nm.className="nm"; nm.textContent=e.name;
+    const meta=document.createElement("span"); meta.className="meta";
+    meta.textContent=`von ${e.author}${mine.has(e.id)?" (du)":""} · ${e.zuege} Züge`;
+    const tg=document.createElement("span"); tg.className="tags"; tagsOf(e.level).forEach(t=>{ const s=document.createElement("span"); s.className="tag"; s.textContent=t; tg.appendChild(s); });
+    meta.appendChild(tg);
+    const sr=document.createElement("span"); sr.className="side-r";
+    if(mine.has(e.id)){
+      const del=document.createElement("button"); del.type="button"; del.className="btn ghost small"; del.textContent="Zurückziehen";
+      del.addEventListener("click",ev=>{ ev.stopPropagation(); if(sRoom) pub(topic(sRoom,"levels/"+e.id),null,true); });
+      sr.appendChild(del);
+    }
+    row.append(res,nm,sr,meta);
+    row.addEventListener("click",()=>loadClassLevel(e.id));
+    row.addEventListener("keydown",ev=>{ if(ev.target===row&&(ev.key==="Enter"||ev.key===" ")){ ev.preventDefault(); loadClassLevel(e.id);} });
+    list.appendChild(row);
+  });
+}
+
+/* ================= Tabs ================= */
+function setTab(t){
+  tab=t; store.set("ls-tab",t);
+  document.querySelectorAll(".tab").forEach(b=>b.setAttribute("aria-selected",b.dataset.tab===t?"true":"false"));
+  $("picker").hidden = t!=="adventure";
+  $("workshopPanel").hidden = t!=="workshop";
+  $("classPanel").hidden = t!=="class";
+  $("research").hidden = t!=="adventure";
+  $("playPanel").hidden = false;
+  if(t==="adventure"){ const i=store.get("ls-last-level"); loadCampaign(Number.isInteger(i)&&LEVELS[i]?i:0); }
+  else if(t==="workshop"){ if(wsStep==="build") enterBuild(); else if(wsStep==="test"){ startTest(); } else { wsStep="build"; enterBuild(); } }
+  else { renderClassList(); const first=sortedLevels()[0];
+    if(ref.kind==="class"&&classLevels.has(ref.id)) loadClassLevel(ref.id);
+    else if(first) loadClassLevel(first.id);
+    else { ref={kind:"class",id:null}; cur=emptyLevel(); resetPlayState(); render(); renderHow(); setMsg("Sobald jemand ein Level teilt, kannst du es hier spielen."); $("playPanel").hidden=true; }
+  }
+}
+function emptyLevel(){ return {title:"",zuege:0,laser:{x:0,y:7,dir:"N"},king:null,walls:[],decoys:[],fixed:[],chest:null,treasure:null}; }
+
+/* ================= Verbindung (MQTT) ================= */
+let client = null, connected = false;
+const handlers = {};      // Filter -> function(topic, payload)
+const connWatchers = [];
+function rand(n){ const a=new Uint32Array(n); crypto.getRandomValues(a); return Array.from(a,v=>ROOM_ALPHABET[v%ROOM_ALPHABET.length]).join(""); }
+const topic = (room, part) => `${TOPIC_BASE}/${room}/${part}`;
+const fmtRoom = r => r.slice(0,3)+"-"+r.slice(3);
+const normRoom = s => String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+const validRoom = r => r.length===6 && [...r].every(c=>ROOM_ALPHABET.includes(c));
+function matches(filter, t){
+  const f=filter.split("/"), p=t.split("/");
+  if(f.length!==p.length) return false;
+  return f.every((s,i)=>s==="+"||s===p[i]);
+}
+function ensureClient(){
+  if(client) return client;
+  if(typeof mqtt==="undefined"){ connWatchers.forEach(f=>f("nolib")); return null; }
+  const opts = { clientId:"ls-"+rand(12), clean:true, keepalive:30, connectTimeout:8000, reconnectPeriod:3000 };
+  if(mode==="teacher" && tRoom) opts.will = { topic:topic(tRoom,"status"), payload:"", qos:1, retain:true };
+  client = mqtt.connect(BROKER, opts);
+  client.on("connect", ()=>{ connected=true; Object.keys(handlers).forEach(t=>client.subscribe(t,{qos:1})); connWatchers.forEach(f=>f("on")); });
+  client.on("reconnect", ()=>connWatchers.forEach(f=>f("retry")));
+  client.on("offline", ()=>{ connected=false; connWatchers.forEach(f=>f("off")); });
+  client.on("close", ()=>{ connected=false; });
+  client.on("error", ()=>connWatchers.forEach(f=>f("off")));
+  client.on("message", (t, buf)=>{ const s=buf.toString(); for(const f in handlers) if(matches(f,t)) handlers[f](t,s); });
+  return client;
+}
+function sub(f, fn){ handlers[f]=fn; const c=ensureClient(); if(c&&connected) c.subscribe(f,{qos:1}); }
+function unsub(f){ delete handlers[f]; if(client) client.unsubscribe(f); }
+function pub(t, obj, retain=false){ const c=ensureClient(); if(!c) return false; c.publish(t, obj===null?"":JSON.stringify(obj), {qos:1, retain}); return true; }
+
+/* ================= Schüler: Raum ================= */
+let sRoom = null, sName = "", sOpen = false, sShare = true, sFound = false, sFoundTimer = null;
+let sId = store.get("ls-id", sessionStorage); if(!sId){ sId=rand(10); store.set("ls-id", sId, sessionStorage); }
+
+function joinMsg(t, cls=""){ const m=$("joinMsg"); m.hidden=!t; m.textContent=t; m.className="msg "+cls; }
+function showJoined(on){ $("joinForm").hidden=on; $("joinedBox").hidden=!on; }
+function sStatus(){
+  const dot=$("sDot");
+  if(!connected){ dot.className="dot off"; $("sentMsg").textContent="Verbindung unterbrochen. Sie wird automatisch wiederhergestellt."; return; }
+  dot.className = "dot "+(sOpen?"on":"off");
+  $("sentMsg").textContent = sOpen ? "Deine Schüsse im Abenteuer gehen automatisch an deine Lehrkraft." : "Die Abgabe ist gerade geschlossen. Du kannst weiterspielen.";
+}
+function join(){
+  const r=normRoom($("sRoom").value), n=cleanText($("sName").value);
+  if(!validRoom(r)) return joinMsg("Der Raumcode hat 6 Zeichen, z. B. K7Q-2MX. Bitte prüfe ihn.","bad");
+  if(!n) return joinMsg("Bitte trage deinen Vornamen oder ein Kürzel ein.","bad");
+  if(!ensureClient()) return joinMsg("Die Verbindung zum Raum ist auf diesem Gerät nicht möglich. Du kannst trotzdem spielen.","bad");
+  if(sRoom && sRoom!==r){ unsub(topic(sRoom,"status")); unsub(topic(sRoom,"levels/+")); }
+  sRoom=r; sName=n; sOpen=false; sFound=false; classLevels.clear(); renderClassList();
+  store.set("ls-student",{room:r,name:n},sessionStorage);
+  joinMsg("Suche Raum "+fmtRoom(r)+" …");
+  $("joinBtn").disabled=true;
+  clearTimeout(sFoundTimer);
+  sFoundTimer=setTimeout(()=>{ if(!sFound){ $("joinBtn").disabled=false; joinMsg(connected?"Raum "+fmtRoom(r)+" nicht gefunden. Ist der Code richtig und die Lehreransicht geöffnet?":"Keine Verbindung zum Server. Prüfe das Internet oder spiele ohne Raum weiter.","bad"); } }, 6000);
+  sub(topic(r,"status"), (t,raw)=>{
+    let s=null; try{ s=raw?JSON.parse(raw):null; }catch(e){}
+    if(!s){ if(sFound){ sOpen=false; sStatus(); $("sentMsg").textContent="Dieser Raum wurde beendet. Tippe auf „Ändern“, um einem neuen Raum beizutreten."; } return; }
+    if(!sFound){
+      sFound=true; clearTimeout(sFoundTimer); $("joinBtn").disabled=false; joinMsg(""); showJoined(true);
+      $("sRoomShow").textContent="Raum "+fmtRoom(r); $("sNameShow").textContent="Angemeldet als "+n;
+      sub(topic(r,"levels/+"), onLevelMsg);
+    }
+    sOpen=!!s.open; sShare=s.share!==false; sStatus(); renderClassList(); updateShareBtn();
+  });
+}
+function leave(){
+  if(sRoom){ unsub(topic(sRoom,"status")); unsub(topic(sRoom,"levels/+")); }
+  sRoom=null; sOpen=false; sFound=false; classLevels.clear(); store.set("ls-student",null,sessionStorage);
+  showJoined(false); renderClassList(); updateShareBtn();
+}
+function sendSubmission(code, end){
+  if(!sRoom||!sOpen||!client) return;
+  if(pub(topic(sRoom,"abgabe"), {v:1, id:sId, name:sName, code, end, shots, t:Date.now()})) $("sentMsg").textContent = `Schuss ${shots} an deine Lehrkraft geschickt.`;
+}
+
+/* ================= Lehrkraft ================= */
+let tRoom = null, tOpen = true, tShare = true, entries = {}, order = [], tSel = null, tFilter = "all";
+function tMsg(t,cls=""){ const m=$("tMsg"); m.textContent=t; m.className="msg "+cls; }
+function connMsg(t,cls=""){ const m=$("tConn"); m.textContent=t; m.className="msg "+cls; }
+const T_END = {hit:"Treffer: Der König ist matt.", out:"Kein Treffer: Der Strahl verlässt das Spielfeld.",
+  wall:"Kein Treffer: Der Strahl endet an einer Mauer.", self:"Kein Treffer: Der Strahl läuft zurück zum Laser.", loop:"Kein Treffer: Der Strahl läuft im Kreis.",
+  decoy:"Kein Treffer: Der Strahl trifft eine Verwirrungskrone.", locked:"Kein Treffer: Der König ist noch im Käfig, der Schlüssel fehlt."};
+
+function saveEntries(){ store.set("ls-entries-"+tRoom, {entries, order}); }
+function loadEntries(){ const d=store.get("ls-entries-"+tRoom); entries=(d&&d.entries)||{}; order=(d&&Array.isArray(d.order))?d.order.filter(k=>entries[k]&&!decode(entries[k].code).error):[]; }
+
+function openRoom(newOne){
+  if(tRoom){ pub(topic(tRoom,"status"), null, true); unsub(topic(tRoom,"abgabe")); unsub(topic(tRoom,"levels/+")); }
+  if(newOne || !tRoom){
+    const keep = !newOne && store.get("ls-room", sessionStorage);
+    tRoom = (keep && validRoom(keep)) ? keep : rand(6);
+    store.set("ls-room", tRoom, sessionStorage);
+  }
+  tOpen=true; tSel=null; classLevels.clear(); loadEntries();
+  $("tRoom").textContent=fmtRoom(tRoom);
+  drawQR();
+  if(!ensureClient()) connMsg("Die Verbindung zum Raum-Server konnte nicht aufgebaut werden. Prüfe die Internetverbindung und lade die Seite neu.","bad");
+  else { connMsg("Verbinde mit Raum "+fmtRoom(tRoom)+" …"); if(connected) announce(); }
+  sub(topic(tRoom,"abgabe"), (t,raw)=>onSubmission(raw));
+  sub(topic(tRoom,"levels/+"), onLevelMsg);
+  renderList(); renderTeacherLevels(); updateOpenBtn();
+  showTeacherBoard(null);
+}
+function announce(){ if(tRoom) pub(topic(tRoom,"status"), {open:tOpen, share:tShare, t:Date.now()}, true); }
+function drawQR(){
+  const box=$("qr"); box.innerHTML="";
+  const url = location.origin + location.pathname + "?raum=" + tRoom;
+  if(location.protocol==="file:"){
+    box.hidden=true;
+    $("qrNote").textContent="Diese Datei ist lokal geöffnet. Damit der QR-Code funktioniert, lade sie auf einen Webspace hoch und öffne sie über dessen Adresse. Der Raumcode funktioniert trotzdem, wenn die Kinder dieselbe Seite öffnen.";
+    return;
+  }
+  box.hidden=false;
+  $("qrNote").textContent="Die Klasse scannt den QR-Code oder öffnet die Seite und gibt den Raumcode ein.";
+  if(typeof QRCode==="undefined"){ box.textContent=url; box.style.lineHeight="1.4"; box.style.color="#000"; return; }
+  new QRCode(box,{text:url,width:400,height:400,colorDark:"#000000",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});
+}
+function onSubmission(raw){
+  if(!tOpen) return;
+  let s; try{ s=JSON.parse(raw); }catch(e){ return; }
+  if(!s||typeof s!=="object"||typeof s.id!=="string"||typeof s.code!=="string") return;
+  const d=decode(s.code.slice(0,60)); if(d.error) return;
+  const name = cleanText(s.name) || "Ohne Namen";
+  const k=s.id.slice(0,20)+"|"+d.lv;
+  const keepL=cur, keepM=mirrors; cur=LEVELS[d.lv]; mirrors=d.mirrors; const end=trace().end; cur=keepL; mirrors=keepM;
+  entries[k]={name,lv:d.lv,code:s.code.slice(0,60),end,shots:Number.isFinite(s.shots)?Math.min(999,Math.max(0,s.shots|0)):0,t:Date.now()};
+  order=order.filter(x=>x!==k); order.unshift(k);
+  saveEntries(); renderList();
+}
+function visibleKeys(){ return order.filter(k=>entries[k] && (tFilter==="all" || entries[k].lv===Number(tFilter))); }
+function renderFilter(){
+  const f=$("tFilter"), keep=tFilter; f.innerHTML="";
+  const opt=(v,t)=>{ const o=document.createElement("option"); o.value=v; o.textContent=t; f.appendChild(o); };
+  opt("all",`Alle Level (${order.length})`);
+  LEVELS.forEach((l,i)=>{ const n=order.filter(k=>entries[k].lv===i).length; opt(String(i),`Level ${i+1}: ${l.title} (${n})`); });
+  f.value=keep;
+}
+function renderList(){
+  const keys=visibleKeys(), list=$("tList"); list.innerHTML="";
+  $("tCount").textContent=`(${order.length})`; renderFilter();
+  if(!keys.length){
+    const p=document.createElement("p"); p.className="empty";
+    p.textContent = order.length ? "Für dieses Level gibt es noch keine Abgaben." : "Noch keine Abgaben. Sobald die Klasse im Abenteuer den Laser abfeuert, erscheinen die Versuche hier.";
+    list.appendChild(p);
+  }
+  keys.forEach(k=>{
+    const e=entries[k];
+    const row=document.createElement("div");
+    row.className="entry"; row.tabIndex=0; row.setAttribute("role","button"); row.setAttribute("aria-current",k===tSel?"true":"false");
+    const res=document.createElement("span"); res.className="res "+(e.end==="hit"?"hit":"miss"); res.textContent=e.end==="hit"?"✓":"✗";
+    res.setAttribute("aria-label",e.end==="hit"?"Treffer":"kein Treffer");
+    const nm=document.createElement("span"); nm.className="nm"; nm.textContent=e.name;
+    const sr=document.createElement("span"); sr.className="side-r"; const lv=document.createElement("span"); lv.className="lv"; lv.textContent="L"+(e.lv+1); sr.appendChild(lv);
+    const meta=document.createElement("span"); meta.className="meta";
+    meta.textContent = `${e.shots}. Schuss · ${Object.keys(decode(e.code).mirrors||{}).length} Spiegel`;
+    row.append(res,nm,sr,meta);
+    row.addEventListener("click",()=>showTeacherBoard(k));
+    row.addEventListener("keydown",ev=>{ if(ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); showTeacherBoard(k);} });
+    list.appendChild(row);
+  });
+  $("nextSub").disabled = !keys.length;
+}
+function renderTeacherLevels(){
+  const list=$("tLevels"); if(!list) return; list.innerHTML="";
+  $("tlCount").textContent=`(${classLevels.size})`;
+  if(!classLevels.size){ const p=document.createElement("p"); p.className="empty"; p.textContent="Noch keine Level geteilt. Die Klasse baut sie im Tab „Level-Werkstatt“."; list.appendChild(p); return; }
+  sortedLevels().forEach(e=>{
+    const row=document.createElement("div"); row.className="entry"; row.tabIndex=0; row.setAttribute("role","button");
+    row.setAttribute("aria-current", tSel==="L:"+e.id ? "true":"false");
+    const res=document.createElement("span"); res.className="res none"; res.textContent="▸";
+    const nm=document.createElement("span"); nm.className="nm"; nm.textContent=e.name;
+    const meta=document.createElement("span"); meta.className="meta"; meta.textContent=`von ${e.author} · ${e.zuege} Züge`;
+    const tg=document.createElement("span"); tg.className="tags"; tagsOf(e.level).forEach(t=>{ const s=document.createElement("span"); s.className="tag"; s.textContent=t; tg.appendChild(s); }); meta.appendChild(tg);
+    const sr=document.createElement("span"); sr.className="side-r";
+    const del=document.createElement("button"); del.type="button"; del.className="btn ghost small danger"; del.textContent="Löschen";
+    del.addEventListener("click",ev=>{ ev.stopPropagation();
+      if(del.dataset.armed!=="1"){ del.dataset.armed="1"; del.textContent="Sicher?"; setTimeout(()=>{ del.dataset.armed=""; del.textContent="Löschen"; },3000); return; }
+      pub(topic(tRoom,"levels/"+e.id),null,true); classLevels.delete(e.id); if(tSel==="L:"+e.id) showTeacherBoard(null); renderTeacherLevels(); });
+    sr.appendChild(del);
+    row.append(res,nm,sr,meta);
+    row.addEventListener("click",()=>showTeacherBoard("L:"+e.id));
+    row.addEventListener("keydown",ev=>{ if(ev.target===row&&(ev.key==="Enter"||ev.key===" ")){ ev.preventDefault(); showTeacherBoard("L:"+e.id);} });
+    list.appendChild(row);
+  });
+}
+function showTeacherBoard(k){
+  animId++; busy=false; won=false; lastBeam=null; revealed=new Set();
+  const isLvl = k && k.startsWith("L:");
+  tSel = k && (isLvl ? classLevels.has(k.slice(2)) : entries[k]) ? k : null;
+  if(!tSel){
+    ref={kind:"teacher"}; cur=LEVELS[0]; mirrors={}; render();
+    $("showing").hidden=true; $("replay").disabled=true;
+    tMsg("Wähle unten eine Abgabe oder ein Klassen-Level aus."); renderList(); renderTeacherLevels(); return;
+  }
+  ref={kind:"teacher"};
+  if(isLvl){
+    const e=classLevels.get(k.slice(2)); cur=e.level; mirrors=codeToMirrors(e.sol,cur).mirrors;
+    $("showWho").textContent=`„${e.name}“`; $("showMeta").textContent=`Klassen-Level von ${e.author} · Lösung mit ${e.zuege} Spiegel${e.zuege===1?"":"n"}`;
+  } else {
+    const e=entries[tSel], d=decode(e.code); cur=LEVELS[d.lv]; mirrors=d.mirrors;
+    $("showWho").textContent=e.name; $("showMeta").textContent=`Level ${d.lv+1} · ${placed()} Spiegel`;
+  }
+  render(); renderList(); renderTeacherLevels();
+  $("showing").hidden=false; $("replay").disabled=false;
+  tMsg("Der Strahl läuft …");
+  lastBeam=trace(); drawBeam(lastBeam,true);
+}
+function teacherFinish(b){
+  const n=b.refl.length;
+  tMsg(`${T_END[b.end]} ${n} Reflexion${n===1?"":"en"}.`, b.end==="hit"?"good":"bad");
+}
+function updateOpenBtn(){
+  $("toggleOpen").textContent = tOpen ? "Abgabe schließen" : "Abgabe öffnen";
+  if(connected) connMsg(tOpen ? `Raum ${fmtRoom(tRoom)} ist offen. Abgaben kommen live an.` : `Raum ${fmtRoom(tRoom)}: Abgabe geschlossen.`, tOpen?"good":"");
+}
+
+/* ================= Modus & Start ================= */
+connWatchers.push(state=>{
+  if(mode==="teacher"){
+    if(state==="on"){ announce(); updateOpenBtn(); }
+    else if(state==="nolib") connMsg("Die Verbindung zum Raum-Server konnte nicht aufgebaut werden. Prüfe die Internetverbindung und lade die Seite neu.","bad");
+    else connMsg("Keine Verbindung zum Server. Wird erneut versucht …","bad");
+  } else if(sRoom) sStatus();
+});
+function setMode(m){
+  mode=m; const t=m==="teacher";
+  $("studentSide").hidden=t; $("teacherSide").hidden=!t; $("tabs").hidden=t;
+  $("sub").textContent = t ? "Lehreransicht: Abgaben live empfangen, Strahlengänge zeigen und Klassen-Level verwalten."
+    : "Stelle Spiegel auf und setze den König mit dem Laserstrahl matt.";
+  $("modeLink").textContent = t ? "Zur Schüleransicht" : "Zur Lehreransicht";
+  $("banner").hidden=true; $("showing").hidden=true;
+  if(t){ $("picker").hidden=true; $("research").hidden=true; if(!tRoom) openRoom(false); else showTeacherBoard(tSel); }
+  else { const st=store.get("ls-tab"); setTab(["adventure","workshop","class"].includes(st)?st:"adventure"); }
+}
+function route(){ setMode(location.hash==="#lehrer"?"teacher":"student"); }
+
+$("modeLink").addEventListener("click",()=>{ if(mode==="teacher") history.replaceState(null,"",location.pathname+location.search); else location.hash="lehrer"; route(); });
+window.addEventListener("hashchange",route);
+document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>setTab(b.dataset.tab)));
+$("joinBtn").addEventListener("click",join);
+$("sName").addEventListener("keydown",e=>{ if(e.key==="Enter") join(); });
+$("sRoom").addEventListener("keydown",e=>{ if(e.key==="Enter") $("sName").focus(); });
+$("leaveBtn").addEventListener("click",leave);
+$("fire").addEventListener("click",fire);
+$("reset").addEventListener("click",()=>{ if(ref.kind==="campaign") loadCampaign(ref.i); else if(ref.kind==="class") loadClassLevel(ref.id); else if(ref.kind==="test") startTest(); });
+$("hintBtn").addEventListener("click",()=>{ const t=$("tip"); t.hidden=!t.hidden; $("hintBtn").textContent=t.hidden?"Tipp":"Tipp ausblenden"; });
+$("normals").addEventListener("change",()=>{ if(lastBeam && !busy) drawBeam(lastBeam,false); });
+$("normalsT").addEventListener("change",()=>{ if(lastBeam && !busy) drawBeam(lastBeam,false); });
+$("next").addEventListener("click",()=>{ if(ref.kind==="campaign") loadCampaign(ref.i<LEVELS.length-1?ref.i+1:0); else { $("banner").hidden=true; $("classList").querySelector(".entry")?.focus(); } });
+$("howMore").addEventListener("click",()=>openIntro($("howMore").dataset.kind));
+$("mOk").addEventListener("click",closeIntro);
+$("modal").addEventListener("click",e=>{ if(e.target===$("modal")) closeIntro(); });
+document.addEventListener("keydown",e=>{ if(e.key==="Escape"&&!$("modal").hidden) closeIntro(); });
+$("wsTest").addEventListener("click",startTest);
+$("wsBack").addEventListener("click",enterBuild);
+$("wsBack2").addEventListener("click",enterBuild);
+$("wsNew").addEventListener("click",()=>{ draft=DEFAULT_DRAFT(); saveDraft(); $("wsName").value=""; $("wsShareMsg").dataset.state=""; enterBuild(); wsMsg("Neues Level angelegt."); });
+$("wsClear").addEventListener("click",()=>{
+  const b=$("wsClear");
+  if(b.dataset.armed!=="1"){ b.dataset.armed="1"; b.textContent="Wirklich leeren?"; setTimeout(()=>{ b.dataset.armed=""; b.textContent="Feld leeren"; },3000); return; }
+  b.dataset.armed=""; b.textContent="Feld leeren";
+  draft={laser:{...draft.laser},king:null,walls:[],decoys:[],chest:null,treasure:null,fixed:[]}; saveDraft(); enterBuild(); wsMsg("Feld geleert. Stell als Erstes den König auf.");
+});
+$("wsPublish").addEventListener("click",publishLevel);
+$("wsName").addEventListener("keydown",e=>{ if(e.key==="Enter") publishLevel(); });
+$("replay").addEventListener("click",()=>{ if(tSel) showTeacherBoard(tSel); });
+$("nextSub").addEventListener("click",()=>{ const keys=visibleKeys(); if(!keys.length) return; const i=keys.indexOf(tSel); showTeacherBoard(keys[(i+1)%keys.length]); });
+$("tFilter").addEventListener("change",()=>{ tFilter=$("tFilter").value; renderList(); });
+$("toggleOpen").addEventListener("click",()=>{ tOpen=!tOpen; announce(); updateOpenBtn(); });
+$("tShare").addEventListener("change",()=>{ tShare=$("tShare").checked; announce(); });
+$("newRoom").addEventListener("click",()=>openRoom(true));
+$("tClear").addEventListener("click",()=>{
+  const b=$("tClear");
+  if(b.dataset.armed!=="1"){ b.dataset.armed="1"; b.textContent="Wirklich alle löschen? Nochmal tippen"; setTimeout(()=>{ b.dataset.armed=""; b.textContent="Neue Runde (alle Abgaben löschen)"; },4000); return; }
+  b.dataset.armed=""; b.textContent="Neue Runde (alle Abgaben löschen)";
+  entries={}; order=[]; saveEntries(); showTeacherBoard(null); tMsg("Alle Abgaben gelöscht. Neue Runde kann starten.");
+});
+$("tLevelsClear").addEventListener("click",()=>{
+  const b=$("tLevelsClear");
+  if(b.dataset.armed!=="1"){ b.dataset.armed="1"; b.textContent="Wirklich alle Klassen-Level löschen?"; setTimeout(()=>{ b.dataset.armed=""; b.textContent="Alle Klassen-Level löschen"; },4000); return; }
+  b.dataset.armed=""; b.textContent="Alle Klassen-Level löschen";
+  [...classLevels.keys()].forEach(id=>pub(topic(tRoom,"levels/"+id),null,true)); classLevels.clear();
+  if(tSel&&tSel.startsWith("L:")) showTeacherBoard(null); renderTeacherLevels(); tMsg("Alle Klassen-Level gelöscht.");
+});
+
+(function start(){
+  const params=new URLSearchParams(location.search);
+  const r=normRoom(params.get("raum"));
+  const saved=store.get("ls-student",sessionStorage);
+  renderTools(); updateSteps();
+  route();
+  if(mode==="student"){
+    if(validRoom(r)){ $("sRoom").value=fmtRoom(r); if(saved&&saved.room===r&&saved.name){ $("sName").value=saved.name; join(); } else $("sName").focus(); }
+    else if(saved&&validRoom(saved.room)&&saved.name){ $("sRoom").value=fmtRoom(saved.room); $("sName").value=saved.name; join(); }
+  }
+})();
+</script>
+</body>
+</html>
